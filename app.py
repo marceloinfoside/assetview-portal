@@ -18,19 +18,15 @@ USERS = {
     }
 }
 
-@app.get('/diag')
-def diag():
+def sign_request(method, path, qs=''):
     dt         = datetime.datetime.now(datetime.timezone.utc)
     now        = dt.strftime('%Y%m%dT%H%M%SZ')
     date_short = dt.strftime('%Y%m%d')
-    path       = '/v3/devices'
-    qs         = '%24top=3'
     empty_hash = hashlib.sha256(b'').hexdigest()
     secret_bytes = base64.b64decode(SECRET_KEY)
 
-    # Uma única tentativa com log completo
     ch = f'content-type:application/json\nhost:{HOST}\nx-abs-date:{now}\n'
-    canonical_request = f'GET\n{path}\n{qs}\n{ch}{empty_hash}'
+    canonical_request = f'{method}\n{path}\n{qs}\n{ch}{empty_hash}'
     cr_hash = hashlib.sha256(canonical_request.encode()).hexdigest()
     scope = f'{date_short}/cadc/abs1'
     ss = f'ABS1-HMAC-SHA-256\n{now}\n{scope}\n{cr_hash}'
@@ -40,24 +36,34 @@ def diag():
     sig = hmac.new(ks, ss.encode(),         hashlib.sha256).hexdigest()
     auth = (f'ABS1-HMAC-SHA-256 Credential={TOKEN_ID}/{scope}, '
             f'SignedHeaders=host;content-type;x-abs-date, Signature={sig}')
+    return {'Content-Type':'application/json','Host':HOST,'x-abs-date':now,'Authorization':auth}
 
-    hdrs = {'Content-Type':'application/json','Host':HOST,'x-abs-date':now,'Authorization':auth}
-
-    try:
-        r = req.get(f'https://{HOST}{path}?{qs}', headers=hdrs, timeout=10)
-        return jsonify({
-            'status': r.status_code,
-            'response_body': r.text,
-            'response_headers': dict(r.headers),
-            'request_url': f'https://{HOST}{path}?{qs}',
-            'canonical_request': canonical_request,
-            'signing_string': ss,
-            'auth_header': auth,
-            'token_id_used': TOKEN_ID,
-            'secret_first_10': SECRET_KEY[:10],
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)})
+@app.get('/diag')
+def diag():
+    results = {}
+    # Testar diferentes endpoints/versões
+    tests = [
+        ('v3_devices',       'GET', '/v3/devices',           '%24top=3'),
+        ('v2_devices',       'GET', '/v2/reporting/devices', '%24top=3'),
+        ('v3_no_qs',         'GET', '/v3/devices',           ''),
+        ('v2_no_qs',         'GET', '/v2/reporting/devices', ''),
+    ]
+    for name, method, path, qs in tests:
+        hdrs = sign_request(method, path, qs)
+        url  = f'https://{HOST}{path}' + (f'?{qs}' if qs else '')
+        try:
+            r = req.get(url, headers=hdrs, timeout=10)
+            results[name] = {
+                'status': r.status_code,
+                'body_snippet': r.text[:200],
+                'www_authenticate': r.headers.get('WWW-Authenticate',''),
+                'x_abs_error': r.headers.get('X-Abs-Error', ''),
+            }
+        except Exception as e:
+            results[name] = {'error': str(e)}
+    results['token_id'] = TOKEN_ID
+    results['secret_start'] = SECRET_KEY[:15]
+    return jsonify(results)
 
 @app.post('/api/login')
 def api_login():
