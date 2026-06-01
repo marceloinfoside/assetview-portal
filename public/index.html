@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AssetView — Portal de Equipamentos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0c10;
+    --surface: #111318;
+    --surface2: #181c24;
+    --border: #1e2330;
+    --accent: #00e5a0;
+    --accent2: #0066ff;
+    --warn: #ff6b35;
+    --text: #e8eaf0;
+    --muted: #5a6070;
+    --online: #00e5a0;
+    --offline: #ff4455;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Syne', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── LOGIN ── */
+  #login-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    position: relative;
+    overflow: hidden;
+  }
+  #login-screen::before {
+    content: '';
+    position: absolute;
+    width: 600px; height: 600px;
+    background: radial-gradient(circle, rgba(0,229,160,0.06) 0%, transparent 70%);
+    top: -100px; left: -100px;
+    pointer-events: none;
+  }
+  #login-screen::after {
+    content: '';
+    position: absolute;
+    width: 500px; height: 500px;
+    background: radial-gradient(circle, rgba(0,102,255,0.05) 0%, transparent 70%);
+    bottom: -100px; right: -50px;
+    pointer-events: none;
+  }
+  .login-box {
+    width: 380px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 48px 40px;
+    position: relative;
+    z-index: 1;
+    animation: fadeUp 0.5s ease both;
+  }
+  @keyframes fadeUp {
+    from { opacity:0; transform:translateY(20px); }
+    to   { opacity:1; transform:translateY(0); }
+  }
+  .login-logo {
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .login-logo span {
+    display: inline-block;
+    width: 10px; height: 10px;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 12px var(--accent);
+  }
+  .login-sub {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 36px;
+    font-family: 'DM Mono', monospace;
+  }
+  .field-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .field-input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 14px;
+    margin-bottom: 20px;
+    transition: border-color 0.2s;
+    outline: none;
+  }
+  .field-input:focus { border-color: var(--accent); }
+  .btn-login {
+    width: 100%;
+    background: var(--accent);
+    color: #000;
+    border: none;
+    border-radius: 8px;
+    padding: 13px;
+    font-family: 'Syne', sans-serif;
+    font-weight: 700;
+    font-size: 14px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    transition: opacity 0.2s, transform 0.15s;
+  }
+  .btn-login:hover { opacity: 0.9; transform: translateY(-1px); }
+  .btn-login:active { transform: translateY(0); }
+  .login-error {
+    color: var(--offline);
+    font-size: 13px;
+    font-family: 'DM Mono', monospace;
+    margin-top: 14px;
+    text-align: center;
+    display: none;
+  }
+
+  /* ── APP ── */
+  #app { display: none; min-height: 100vh; }
+
+  /* ── TOPBAR ── */
+  .topbar {
+    height: 60px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+  .topbar-logo {
+    font-size: 18px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .topbar-logo span {
+    display: inline-block;
+    width: 8px; height: 8px;
+    background: var(--accent);
+    border-radius: 50%;
+    box-shadow: 0 0 8px var(--accent);
+  }
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .user-badge {
+    font-size: 13px;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+  }
+  .user-badge strong { color: var(--text); }
+  .btn-logout {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-family: 'Syne', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn-logout:hover { border-color: var(--offline); color: var(--offline); }
+
+  /* ── MAIN ── */
+  .main {
+    padding: 32px 28px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  /* ── STATS ── */
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    animation: fadeUp 0.4s ease both;
+  }
+  .stat-card:nth-child(1) { animation-delay: 0.05s; }
+  .stat-card:nth-child(2) { animation-delay: 0.10s; }
+  .stat-card:nth-child(3) { animation-delay: 0.15s; }
+  .stat-card:nth-child(4) { animation-delay: 0.20s; }
+  .stat-label {
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .stat-value {
+    font-size: 32px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1;
+  }
+  .stat-value.green { color: var(--accent); }
+  .stat-value.red   { color: var(--offline); }
+  .stat-value.blue  { color: var(--accent2); }
+
+  /* ── TOOLBAR ── */
+  .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .section-title {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+  }
+  .toolbar-right {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+  }
+  .search-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 14px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    outline: none;
+    width: 220px;
+    transition: border-color 0.2s;
+  }
+  .search-box:focus { border-color: var(--accent); }
+  .search-box::placeholder { color: var(--muted); }
+  .btn-refresh {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 9px 16px;
+    border-radius: 8px;
+    font-family: 'Syne', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-refresh:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── DEVICE GRID ── */
+  .device-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: 16px;
+  }
+  .device-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    transition: border-color 0.2s, transform 0.2s;
+    animation: fadeUp 0.4s ease both;
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+  }
+  .device-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity 0.2s;
+  }
+  .device-card.offline::before { background: var(--offline); }
+  .device-card:hover { border-color: #2a3040; transform: translateY(-2px); }
+  .device-card:hover::before { opacity: 1; }
+
+  .device-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .device-name {
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    line-height: 1.2;
+    margin-bottom: 3px;
+  }
+  .device-model {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+  }
+  .status-badge {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    padding: 4px 10px;
+    border-radius: 20px;
+    white-space: nowrap;
+  }
+  .status-badge.online  { background: rgba(0,229,160,0.1); color: var(--online); }
+  .status-badge.offline { background: rgba(255,68,85,0.1);  color: var(--offline); }
+  .status-dot {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .status-badge.online .status-dot { box-shadow: 0 0 6px var(--online); animation: pulse 2s infinite; }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.4; }
+  }
+
+  .device-divider {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 14px 0;
+  }
+
+  .device-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .info-item { }
+  .info-item.full { grid-column: 1 / -1; }
+  .info-key {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 3px;
+  }
+  .info-val {
+    font-size: 13px;
+    font-family: 'DM Mono', monospace;
+    color: var(--text);
+    word-break: break-all;
+  }
+
+  .device-metrics {
+    margin-top: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .metric-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .metric-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    width: 36px;
+    flex-shrink: 0;
+  }
+  .metric-bar-bg {
+    flex: 1;
+    height: 5px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .metric-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.8s cubic-bezier(0.4,0,0.2,1);
+    background: var(--accent);
+  }
+  .metric-bar-fill.warn { background: var(--warn); }
+  .metric-bar-fill.crit { background: var(--offline); }
+  .metric-pct {
+    font-size: 12px;
+    font-family: 'DM Mono', monospace;
+    color: var(--muted);
+    width: 36px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+
+  .device-location {
+    margin-top: 12px;
+    font-size: 12px;
+    font-family: 'DM Mono', monospace;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .location-icon { font-size: 13px; }
+  .location-link {
+    color: var(--accent2);
+    text-decoration: none;
+    font-size: 12px;
+  }
+  .location-link:hover { text-decoration: underline; }
+
+  /* ── LOADING / EMPTY ── */
+  .loading-state, .empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    padding: 80px 20px;
+    color: var(--muted);
+    font-family: 'DM Mono', monospace;
+    font-size: 14px;
+  }
+  .loading-spinner {
+    display: inline-block;
+    width: 32px; height: 32px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── GROUP FILTER (admin) ── */
+  .group-filter {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 14px;
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+  }
+  .group-filter:focus { border-color: var(--accent); }
+
+  /* ── LAST UPDATE ── */
+  .last-update {
+    font-size: 12px;
+    font-family: 'DM Mono', monospace;
+    color: var(--muted);
+    margin-top: 24px;
+    text-align: right;
+  }
+
+  @media (max-width: 768px) {
+    .stats-row { grid-template-columns: repeat(2, 1fr); }
+    .device-grid { grid-template-columns: 1fr; }
+    .main { padding: 20px 16px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="login-screen">
+  <div class="login-box">
+    <div class="login-logo"><span></span> AssetView</div>
+    <div class="login-sub">Portal de Monitoramento de Equipamentos</div>
+    <div class="field-label">Usuário</div>
+    <input class="field-input" type="text" id="inp-user" placeholder="seu.usuario" autocomplete="username">
+    <div class="field-label">Senha</div>
+    <input class="field-input" type="password" id="inp-pass" placeholder="••••••••" autocomplete="current-password">
+    <button class="btn-login" id="btn-login">Entrar</button>
+    <div class="login-error" id="login-error">Usuário ou senha inválidos.</div>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <div class="topbar">
+    <div class="topbar-logo"><span></span> AssetView</div>
+    <div class="topbar-right">
+      <div class="user-badge">Olá, <strong id="user-name">—</strong></div>
+      <button class="btn-logout" id="btn-logout">Sair</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-label">Total de Equipamentos</div>
+        <div class="stat-value" id="stat-total">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Online</div>
+        <div class="stat-value green" id="stat-online">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Offline</div>
+        <div class="stat-value red" id="stat-offline">—</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Última Sync</div>
+        <div class="stat-value blue" id="stat-sync" style="font-size:18px;padding-top:6px">—</div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="section-title">Equipamentos</div>
+      <div class="toolbar-right">
+        <select class="group-filter" id="group-filter" style="display:none">
+          <option value="">Todos os grupos</option>
+        </select>
+        <input class="search-box" id="search-box" type="text" placeholder="Buscar equipamento...">
+        <button class="btn-refresh" id="btn-refresh">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
+            <path d="M3 3v5h5"/>
+          </svg>
+          Atualizar
+        </button>
+      </div>
+    </div>
+
+    <!-- Device Grid -->
+    <div class="device-grid" id="device-grid">
+      <div class="loading-state">
+        <div class="loading-spinner"></div><br>Carregando equipamentos...
+      </div>
+    </div>
+
+    <div class="last-update" id="last-update"></div>
+  </div>
+</div>
+
+<script>
+let currentUser = null;
+let allDevices = [];
+
+// ── Helpers ────────────────────────────────────────────────────
+function fmt(v) { return v || '—'; }
+
+function timeSince(dateStr) {
+  if (!dateStr) return '—';
+  const diff = (Date.now() - new Date(dateStr)) / 1000;
+  if (diff < 60)   return 'Agora';
+  if (diff < 3600) return `${Math.floor(diff/60)}min atrás`;
+  if (diff < 86400) return `${Math.floor(diff/3600)}h atrás`;
+  return `${Math.floor(diff/86400)}d atrás`;
+}
+
+function diskUsed(diskInfo) {
+  if (!diskInfo || !diskInfo.length) return null;
+  const d = diskInfo[0];
+  if (!d.diskSize || !d.freeDiskSize) return null;
+  return Math.round(((d.diskSize - d.freeDiskSize) / d.diskSize) * 100);
+}
+
+function memUsed(memInfo) {
+  if (!memInfo) return null;
+  const { totalPhysicalMemory, availablePhysicalMemory } = memInfo;
+  if (!totalPhysicalMemory || !availablePhysicalMemory) return null;
+  return Math.round(((totalPhysicalMemory - availablePhysicalMemory) / totalPhysicalMemory) * 100);
+}
+
+function barClass(pct) {
+  if (pct >= 90) return 'crit';
+  if (pct >= 70) return 'warn';
+  return '';
+}
+
+function metricBar(label, pct) {
+  if (pct === null) return '';
+  const cls = barClass(pct);
+  return `
+    <div class="metric-row">
+      <div class="metric-label">${label}</div>
+      <div class="metric-bar-bg">
+        <div class="metric-bar-fill ${cls}" style="width:${pct}%"></div>
+      </div>
+      <div class="metric-pct">${pct}%</div>
+    </div>`;
+}
+
+function locationHTML(geo) {
+  if (!geo || !geo.coordinates) return '';
+  const { latitude, longitude, city, countryName } = geo.coordinates || geo;
+  const lat = latitude || geo.latitude;
+  const lng = longitude || geo.longitude;
+  const place = [city, countryName].filter(Boolean).join(', ') || `${lat?.toFixed(4)}, ${lng?.toFixed(4)}`;
+  if (!lat || !lng) return '';
+  const mapsUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+  return `
+    <div class="device-location">
+      <span class="location-icon">📍</span>
+      <a class="location-link" href="${mapsUrl}" target="_blank">${place}</a>
+    </div>`;
+}
+
+function isOnline(device) {
+  if (!device.lastConnectedUtc) return false;
+  const diff = (Date.now() - new Date(device.lastConnectedUtc)) / 1000;
+  return diff < 86400; // online se conectou nas últimas 24h
+}
+
+// ── Renderizar cards ───────────────────────────────────────────
+function renderDevices(devices) {
+  const grid = document.getElementById('device-grid');
+  if (!devices.length) {
+    grid.innerHTML = '<div class="empty-state">Nenhum equipamento encontrado.</div>';
+    return;
+  }
+
+  const online  = devices.filter(isOnline).length;
+  const offline = devices.length - online;
+  document.getElementById('stat-total').textContent   = devices.length;
+  document.getElementById('stat-online').textContent  = online;
+  document.getElementById('stat-offline').textContent = offline;
+  document.getElementById('stat-sync').textContent    = new Date().toLocaleTimeString('pt-BR', {hour:'2-digit',minute:'2-digit'});
+  document.getElementById('last-update').textContent  = `Última atualização: ${new Date().toLocaleString('pt-BR')}`;
+
+  grid.innerHTML = devices.map((d, i) => {
+    const online_  = isOnline(d);
+    const diskPct  = diskUsed(d.systemDiskInfo);
+    const memPct   = memUsed(d.memoryInfo);
+    const cpu      = d.cpuInfo;
+    const serial   = d.serial || d.esn || '—';
+    const model    = d.systemModel || '—';
+    const os       = [d.osName, d.osVersion].filter(Boolean).join(' ') || '—';
+    const user_    = d.username || '—';
+    const group    = d.groupName || '—';
+    const lastSeen = timeSince(d.lastConnectedUtc);
+
+    return `
+    <div class="device-card ${online_ ? '' : 'offline'}" style="animation-delay:${i * 0.04}s">
+      <div class="device-header">
+        <div>
+          <div class="device-name">${fmt(d.systemName)}</div>
+          <div class="device-model">${model}</div>
+        </div>
+        <div class="status-badge ${online_ ? 'online' : 'offline'}">
+          <div class="status-dot"></div>
+          ${online_ ? 'Online' : 'Offline'}
+        </div>
+      </div>
+      <hr class="device-divider">
+      <div class="device-info-grid">
+        <div class="info-item">
+          <div class="info-key">Serial</div>
+          <div class="info-val">${serial}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-key">Usuário</div>
+          <div class="info-val">${user_}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-key">Sistema Op.</div>
+          <div class="info-val">${os}</div>
+        </div>
+        <div class="info-item">
+          <div class="info-key">Último acesso</div>
+          <div class="info-val">${lastSeen}</div>
+        </div>
+        ${currentUser?.isAdmin ? `
+        <div class="info-item full">
+          <div class="info-key">Grupo</div>
+          <div class="info-val">${group}</div>
+        </div>` : ''}
+        ${cpu ? `
+        <div class="info-item full">
+          <div class="info-key">Processador</div>
+          <div class="info-val">${cpu.processorName || cpu.name || '—'}</div>
+        </div>` : ''}
+      </div>
+      ${(diskPct !== null || memPct !== null) ? `
+      <hr class="device-divider">
+      <div class="device-metrics">
+        ${metricBar('DSK', diskPct)}
+        ${metricBar('MEM', memPct)}
+      </div>` : ''}
+      ${locationHTML(d.geoData)}
+    </div>`;
+  }).join('');
+}
+
+// ── Carregar dispositivos ──────────────────────────────────────
+async function loadDevices(group = '') {
+  const grid = document.getElementById('device-grid');
+  grid.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><br>Carregando equipamentos...</div>';
+
+  try {
+    const url = group ? `/api/devices?group=${encodeURIComponent(group)}` : '/api/devices';
+    const resp = await fetch(url);
+    if (resp.status === 401) { showLogin(); return; }
+    const data = await resp.json();
+
+    if (data.error) {
+      grid.innerHTML = `<div class="empty-state">Erro ao conectar com Absolute API.<br><small style="color:#333">${JSON.stringify(data.error).slice(0,200)}</small></div>`;
+      return;
+    }
+
+    allDevices = Array.isArray(data.devices) ? data.devices : (data.devices?.value || []);
+    applySearch();
+
+    // Popular grupos no filtro admin
+    if (currentUser?.isAdmin) {
+      const groups = [...new Set(allDevices.map(d => d.groupName).filter(Boolean))].sort();
+      const sel = document.getElementById('group-filter');
+      sel.innerHTML = '<option value="">Todos os grupos</option>' +
+        groups.map(g => `<option value="${g}">${g}</option>`).join('');
+    }
+  } catch (e) {
+    grid.innerHTML = `<div class="empty-state">Erro de conexão.<br><small>${e.message}</small></div>`;
+  }
+}
+
+function applySearch() {
+  const q = document.getElementById('search-box').value.toLowerCase();
+  const filtered = q
+    ? allDevices.filter(d =>
+        (d.systemName || '').toLowerCase().includes(q) ||
+        (d.serial || '').toLowerCase().includes(q) ||
+        (d.username || '').toLowerCase().includes(q) ||
+        (d.systemModel || '').toLowerCase().includes(q)
+      )
+    : allDevices;
+  renderDevices(filtered);
+}
+
+// ── Auth ───────────────────────────────────────────────────────
+function showLogin() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+}
+function showApp(user) {
+  currentUser = user;
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('user-name').textContent = user.name;
+  if (user.isAdmin) {
+    document.getElementById('group-filter').style.display = 'block';
+  }
+  loadDevices();
+}
+
+document.getElementById('btn-login').addEventListener('click', async () => {
+  const username = document.getElementById('inp-user').value.trim();
+  const password = document.getElementById('inp-pass').value;
+  const err = document.getElementById('login-error');
+  err.style.display = 'none';
+
+  const resp = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password })
+  });
+  const data = await resp.json();
+  if (!resp.ok) { err.style.display = 'block'; return; }
+  showApp(data);
+});
+
+document.getElementById('inp-pass').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('btn-login').click();
+});
+
+document.getElementById('btn-logout').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  showLogin();
+});
+
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  const group = document.getElementById('group-filter').value;
+  loadDevices(group);
+});
+
+document.getElementById('search-box').addEventListener('input', applySearch);
+
+document.getElementById('group-filter').addEventListener('change', e => {
+  loadDevices(e.target.value);
+});
+
+// ── Init ───────────────────────────────────────────────────────
+(async () => {
+  try {
+    const resp = await fetch('/api/me');
+    if (resp.ok) {
+      const user = await resp.json();
+      showApp(user);
+    } else {
+      showLogin();
+    }
+  } catch {
+    showLogin();
+  }
+})();
+</script>
+</body>
+</html>
