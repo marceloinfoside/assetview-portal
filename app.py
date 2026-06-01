@@ -1,7 +1,6 @@
 import hmac, hashlib, base64, datetime, os
 import requests as req
 from flask import Flask, jsonify, session, request, send_from_directory
-from functools import wraps
 
 app = Flask(__name__, static_folder='public', static_url_path='')
 app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
@@ -19,7 +18,6 @@ USERS = {
     }
 }
 
-# ── Diagnóstico: testa todas as combinações ────────────────────
 @app.get('/diag')
 def diag():
     dt         = datetime.datetime.now(datetime.timezone.utc)
@@ -30,56 +28,37 @@ def diag():
     empty_hash = hashlib.sha256(b'').hexdigest()
     secret_bytes = base64.b64decode(SECRET_KEY)
 
-    results = {}
+    # Uma única tentativa com log completo
+    ch = f'content-type:application/json\nhost:{HOST}\nx-abs-date:{now}\n'
+    canonical_request = f'GET\n{path}\n{qs}\n{ch}{empty_hash}'
+    cr_hash = hashlib.sha256(canonical_request.encode()).hexdigest()
+    scope = f'{date_short}/cadc/abs1'
+    ss = f'ABS1-HMAC-SHA-256\n{now}\n{scope}\n{cr_hash}'
+    k  = ('ABS1' + SECRET_KEY).encode('utf-8')
+    kd = hmac.new(k,  date_short.encode(), hashlib.sha256).digest()
+    ks = hmac.new(kd, b'abs1_request',     hashlib.sha256).digest()
+    sig = hmac.new(ks, ss.encode(),         hashlib.sha256).hexdigest()
+    auth = (f'ABS1-HMAC-SHA-256 Credential={TOKEN_ID}/{scope}, '
+            f'SignedHeaders=host;content-type;x-abs-date, Signature={sig}')
 
-    headers_variants = {
-        'ct_host_date': f'content-type:application/json\nhost:{HOST}\nx-abs-date:{now}\n',
-        'host_ct_date': f'host:{HOST}\ncontent-type:application/json\nx-abs-date:{now}\n',
-    }
-    cr_variants = {}
-    for hname, ch in headers_variants.items():
-        cr_variants[f'{hname}_no_nl']  = f'GET\n{path}\n{qs}\n{ch}{empty_hash}'
-        cr_variants[f'{hname}_yes_nl'] = f'GET\n{path}\n{qs}\n{ch}\n{empty_hash}'
+    hdrs = {'Content-Type':'application/json','Host':HOST,'x-abs-date':now,'Authorization':auth}
 
-    key_variants = {
-        'ABS1_b64str': ('ABS1' + SECRET_KEY).encode('utf-8'),
-        'ABS1_bytes':  b'ABS1' + secret_bytes,
-        'bytes_only':  secret_bytes,
-    }
+    try:
+        r = req.get(f'https://{HOST}{path}?{qs}', headers=hdrs, timeout=10)
+        return jsonify({
+            'status': r.status_code,
+            'response_body': r.text,
+            'response_headers': dict(r.headers),
+            'request_url': f'https://{HOST}{path}?{qs}',
+            'canonical_request': canonical_request,
+            'signing_string': ss,
+            'auth_header': auth,
+            'token_id_used': TOKEN_ID,
+            'secret_first_10': SECRET_KEY[:10],
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
-    scope_variants = [
-        f'{date_short}/cadc/abs1',
-        f'{date_short}/usdc/abs1',
-        date_short,
-    ]
-
-    for cr_name, canonical_request in cr_variants.items():
-        cr_hash = hashlib.sha256(canonical_request.encode()).hexdigest()
-        for scope in scope_variants:
-            ss = f'ABS1-HMAC-SHA-256\n{now}\n{scope}\n{cr_hash}'
-            for kname, k in key_variants.items():
-                kd  = hmac.new(k,  date_short.encode(), hashlib.sha256).digest()
-                ks  = hmac.new(kd, b'abs1_request',     hashlib.sha256).digest()
-                sig = hmac.new(ks, ss.encode(),          hashlib.sha256).hexdigest()
-                auth = (f'ABS1-HMAC-SHA-256 Credential={TOKEN_ID}/{scope}, '
-                        f'SignedHeaders=host;content-type;x-abs-date, Signature={sig}')
-                key = f'{cr_name}|{scope}|{kname}'
-                # Header order matters — use the same order as canonical
-                if 'ct_host' in cr_name:
-                    hdrs = {'Content-Type':'application/json','Host':HOST,'x-abs-date':now,'Authorization':auth}
-                else:
-                    hdrs = {'Host':HOST,'Content-Type':'application/json','x-abs-date':now,'Authorization':auth}
-                try:
-                    r = req.get(f'https://{HOST}{path}?{qs}', headers=hdrs, timeout=8)
-                    results[key] = r.status_code
-                    if r.status_code == 200:
-                        results['__WINNER__'] = key
-                except Exception as e:
-                    results[key] = str(e)[:50]
-
-    return jsonify(results)
-
-# ── Auth ───────────────────────────────────────────────────────
 @app.post('/api/login')
 def api_login():
     data = request.get_json()
@@ -105,7 +84,7 @@ def api_me():
 def api_devices():
     if 'user' not in session:
         return jsonify({'error': 'Não autenticado'}), 401
-    return jsonify({'devices': [], 'error': 'Use /diag para diagnosticar'})
+    return jsonify({'devices': []})
 
 @app.get('/', defaults={'path': ''})
 @app.get('/<path:path>')
@@ -115,4 +94,3 @@ def serve(path):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 3000))
     app.run(host='0.0.0.0', port=port)
-
