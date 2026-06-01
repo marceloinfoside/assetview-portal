@@ -41,7 +41,7 @@ def build_absolute_headers(method, path, query_string=''):
         f'host:{ABSOLUTE_HOST}\n'
         f'x-abs-date:{now}\n'
     )
-    canonical_request = '\n'.join([method, path, query_string, canonical_headers, empty_hash])
+    canonical_request = method + '\n' + path + '\n' + query_string + '\n' + canonical_headers + empty_hash
 
     # 2. Signing string  — CredentialScope = date/region/abs1
     cr_hash          = hashlib.sha256(canonical_request.encode()).hexdigest()
