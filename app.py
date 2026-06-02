@@ -19,11 +19,15 @@ def b64url(data):
         data = data.encode('utf-8')
     return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
 
+def sign_jws(header, payload, key):
+    si = f"{b64url(header)}.{b64url(payload)}"
+    sig = b64url(hmac.new(key, si.encode(), hashlib.sha256).digest())
+    return f"{si}.{sig}"
+
 def validate(jws):
-    """Usa o endpoint /jws/validate para checar a assinatura"""
     try:
         r = requests.post(f'https://{HOST}/jws/validate', data=jws,
-                          headers={'Content-Type':'text/plain'}, timeout=10)
+                         headers={'Content-Type':'text/plain'}, timeout=10)
         return r.status_code, r.text[:150]
     except Exception as e:
         return 'ERR', str(e)[:80]
@@ -31,46 +35,26 @@ def validate(jws):
 @app.get('/diag')
 def diag():
     out = {}
-    path, q = '/v3/devices', '$top=3'
-    key = base64.b64decode(SECRET)  # sabemos que é base64
-    issued_at = int(time.time() * 1000)
-
+    now_ms = int(time.time() * 1000)
     jose = {"alg":"HS256","kid":TOKEN,"method":"GET","content-type":"application/json",
-            "uri":path,"query-string":q,"issuedAt":issued_at}
-    eh = b64url(jose)
+            "uri":"/v3/devices","query-string":"$top=3","issuedAt":now_ms}
 
-    # Variação 1: payload {} (atual)
-    ep1 = b64url({})
-    si1 = f"{eh}.{ep1}"
-    sig1 = b64url(hmac.new(key, si1.encode(), hashlib.sha256).digest())
-    out['payload_empty_obj'] = dict(zip(['status','body'], validate(f"{si1}.{sig1}")))
+    # Diferentes formas de derivar a chave HMAC
+    keys = {
+        'b64decode': base64.b64decode(SECRET),
+        'ABS1+b64decode': b'ABS1' + base64.b64decode(SECRET),
+        'ABS1+string': ('ABS1'+SECRET).encode(),
+        'string_utf8': SECRET.encode('utf-8'),
+        'b64url_decode': base64.urlsafe_b64decode(SECRET + '=='),
+        'hex_decode': bytes.fromhex(SECRET) if all(c in '0123456789abcdefABCDEF' for c in SECRET) else b'',
+    }
 
-    # Variação 2: payload vazio (string vazia)
-    ep2 = b64url("")
-    si2 = f"{eh}.{ep2}"
-    sig2 = b64url(hmac.new(key, si2.encode(), hashlib.sha256).digest())
-    out['payload_empty_str'] = dict(zip(['status','body'], validate(f"{si2}.{sig2}")))
-
-    # Variação 3: sem payload (header..sig)
-    si3 = f"{eh}."
-    sig3 = b64url(hmac.new(key, si3.encode(), hashlib.sha256).digest())
-    out['payload_none'] = dict(zip(['status','body'], validate(f"{eh}..{sig3}")))
-
-    # Variação 4: assinar só o header (sem o ponto)
-    sig4 = b64url(hmac.new(key, eh.encode(), hashlib.sha256).digest())
-    out['sign_header_only'] = dict(zip(['status','body'], validate(f"{eh}.{ep1}.{sig4}")))
-
-    # Variação 5: secret string + base64 no signing (híbrido)
-    si5 = f"{eh}.{ep1}"
-    sig5 = b64url(hmac.new(SECRET.encode(), si5.encode(), hashlib.sha256).digest())
-    out['secret_string'] = dict(zip(['status','body'], validate(f"{si5}.{sig5}")))
-
-    # Variação 6: jose header SEM os campos extras (JWT padrão)
-    jose_min = {"alg":"HS256","kid":TOKEN}
-    eh6 = b64url(jose_min)
-    si6 = f"{eh6}.{ep1}"
-    sig6 = b64url(hmac.new(key, si6.encode(), hashlib.sha256).digest())
-    out['jose_minimal'] = dict(zip(['status','body'], validate(f"{si6}.{sig6}")))
+    for kname, key in keys.items():
+        if not key:
+            out[kname] = {'status':'skip','body':'chave vazia'}
+            continue
+        jws = sign_jws(jose, {}, key)
+        out[kname] = dict(zip(['status','body'], validate(jws)))
 
     return jsonify(out)
 
