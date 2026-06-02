@@ -92,19 +92,22 @@ def absolute_request(path, query='', method='GET', body=''):
     print(f'[Absolute] Status {resp.status_code}')
     return resp
 
-# ── Buscar dispositivos (usa v2/reporting/devices) ─────────────
+# ── Buscar dispositivos (usa v3/devices) ───────────────────────
 def fetch_devices(group_filter=None):
-    select = ('$select=esn,lastConnectedUtc,domain,username,systemName,serial,'
-              'systemModel,systemManufacturer,os,localIp,publicIp')
-    filter_ = "$filter=agentStatus eq 'A'"
+    select = ('$select=id,esn,systemName,username,systemModel,serial,osName,'
+              'osVersion,lastConnectedUtc,geoData,systemDiskInfo,memoryInfo,'
+              'cpuInfo,groupName,agentStatus')
+    parts = [select, '$top=300']
     if group_filter:
-        filter_ += f" and groupName eq '{group_filter}'"
-    query = filter_ + '&' + select + '&$top=300'
+        parts.append(f"$filter=groupName eq '{group_filter}'")
+    query = '&'.join(parts)
 
-    resp = absolute_request('/v2/reporting/devices', query, 'GET', '')
+    resp = absolute_request('/v3/devices', query, 'GET', '')
     if not resp.ok:
         return None, f'API {resp.status_code}: {resp.text[:200]}'
-    return resp.json(), None
+    data = resp.json()
+    devices = data if isinstance(data, list) else data.get('value', data)
+    return devices, None
 
 # ── Auth ───────────────────────────────────────────────────────
 def login_required(f):
@@ -148,7 +151,7 @@ def api_devices():
 
 @app.get('/diag')
 def diag():
-    resp = absolute_request('/v2/reporting/devices', "$filter=agentStatus eq 'A'&$top=3", 'GET', '')
+    resp = absolute_request('/v3/devices', '$top=3', 'GET', '')
     return jsonify({'status': resp.status_code, 'body': resp.text[:500]})
 
 @app.get('/', defaults={'path': ''})
