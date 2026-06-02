@@ -1,7 +1,5 @@
-import hmac, hashlib, datetime, os, ssl
+import hmac, hashlib, json, time, base64, os
 import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.ssl_ import create_urllib3_context
 from flask import Flask, request, jsonify, session, send_from_directory
 
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -14,68 +12,59 @@ HOST = os.environ.get('ABSOLUTE_HOST', 'api.absolute.com')
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
 
-# Forçar TLS 1.2 (Absolute exige TLS 1.2)
-class TLS12Adapter(HTTPAdapter):
-    def init_poolmanager(self, *args, **kwargs):
-        ctx = create_urllib3_context()
-        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
-        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
-        kwargs['ssl_context'] = ctx
-        return super().init_poolmanager(*args, **kwargs)
+def b64url(data):
+    if isinstance(data, dict):
+        data = json.dumps(data, separators=(',', ':')).encode('utf-8')
+    elif isinstance(data, str):
+        data = data.encode('utf-8')
+    return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
 
-def enc(v):
-    for a,b in [('$','%24'),(' ','%20'),("'",'%27'),('(','%28'),(')','%29'),(',','%2C'),(':','%3A')]:
-        v = v.replace(a,b)
-    return v
+def make_jws(method, path, query, secret_mode):
+    issued_at = int(time.time() * 1000)
+    jose = {
+        "alg": "HS256",
+        "kid": TOKEN,
+        "method": method,
+        "content-type": "application/json",
+        "uri": path,
+        "query-string": query,
+        "issuedAt": issued_at
+    }
+    encoded_header = b64url(jose)
+    encoded_payload = b64url({})
+    signing_input = f"{encoded_header}.{encoded_payload}"
 
-def build(path, query):
-    date = datetime.datetime.utcnow()
-    dymd = date.strftime('%Y%m%d')
-    xdate = dymd + 'T' + date.strftime('%H%M%S') + 'Z'
-    bhash = hashlib.sha256(b'').hexdigest()
-    canon = f'GET\n{path}\n{enc(query)}\nhost:{HOST}\ncontent-type:application/json\nx-abs-date:{xdate}\n{bhash}'
-    rhash = hashlib.sha256(canon.encode()).hexdigest()
-    scope = dymd + '/cadc/abs1'
-    sts = f'ABS1-HMAC-SHA-256\n{xdate}\n{scope}\n{rhash}'
-    ks = ('ABS1'+SECRET).encode()
-    kd = hmac.new(ks, dymd.encode(), hashlib.sha256).digest()
-    sk = hmac.new(kd, b'abs1_request', hashlib.sha256).digest()
-    sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
-    headers = {'host':HOST,'Content-Type':'application/json','x-abs-date':xdate,
-               'Authorization':f'ABS1-HMAC-SHA-256 Credential={TOKEN}/{scope}, SignedHeaders=host;content-type;x-abs-date, Signature={sig}'}
-    return headers, canon, xdate, sig
+    if secret_mode == 'string':
+        key = SECRET.encode('utf-8')
+    else:  # base64 decoded
+        key = base64.b64decode(SECRET)
+
+    signature = hmac.new(key, signing_input.encode('utf-8'), hashlib.sha256).digest()
+    encoded_sig = b64url(signature)
+    return f"{encoded_header}.{encoded_payload}.{encoded_sig}", issued_at
+
+def try_request(path, query, secret_mode, auth_format):
+    jws, issued_at = make_jws('GET', path, query, secret_mode)
+    if auth_format == 'bearer':
+        auth = f"Bearer {jws}"
+    else:
+        auth = jws
+    headers = {'Authorization': auth, 'Content-Type': 'application/json'}
+    url = f'https://{HOST}{path}' + (f'?{query}' if query else '')
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        return r.status_code, r.text[:120]
+    except Exception as e:
+        return 'ERR', str(e)[:80]
 
 @app.get('/diag')
 def diag():
     out = {}
     path, q = '/v3/devices', '$top=3'
-    headers, canon, xdate, sig = build(path, q)
-    url = f'https://{HOST}{path}?{enc(q)}'
-
-    # Tentativa COM TLS 1.2 forçado
-    try:
-        s = requests.Session()
-        s.mount('https://', TLS12Adapter())
-        r = s.get(url, headers=headers, timeout=10)
-        out['tls12_forced'] = {'status': r.status_code, 'body': r.text[:100]}
-    except Exception as e:
-        out['tls12_forced'] = {'error': str(e)[:120]}
-
-    # Tentativa normal
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        out['normal'] = {'status': r.status_code, 'body': r.text[:100]}
-    except Exception as e:
-        out['normal'] = {'error': str(e)[:120]}
-
-    # Dados para Authentication Debugging do Absolute
-    out['debug_info'] = {
-        'tokenID': TOKEN,
-        'X-Abs-Date': xdate,
-        'Signature': sig,
-        'CanonicalRequest': canon,
-        'server_utc_now': datetime.datetime.utcnow().isoformat(),
-    }
+    for sm in ['string', 'base64']:
+        for af in ['bearer', 'plain']:
+            s, b = try_request(path, q, sm, af)
+            out[f'secret={sm}|{af}'] = {'status': s, 'body': b}
     return jsonify(out)
 
 @app.post('/api/login')
@@ -99,7 +88,7 @@ def me():
 @app.get('/api/devices')
 def devices():
     if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
-    return jsonify({'devices':[]})
+    return jsonify({'devices':[], 'error':'Use /diag'})
 
 @app.get('/', defaults={'path':''})
 @app.get('/<path:path>')
