@@ -1,4 +1,4 @@
-import time, base64, os, json
+import time, os
 import jwt as pyjwt
 import requests
 from flask import Flask, request, jsonify, session, send_from_directory
@@ -18,57 +18,47 @@ def validate(jws):
     try:
         r = requests.post(VALIDATE_URL, data=jws,
                          headers={'Content-Type':'text/plain'}, timeout=10)
-        return r.status_code, r.text[:150]
+        return r.status_code, r.text[:200]
     except Exception as e:
         return 'ERR', str(e)[:80]
+
+def mk(payload, headers):
+    h = {"kid": TOKEN}
+    h.update(headers)
+    return pyjwt.encode(payload, SECRET, algorithm="HS256", headers=h)
 
 @app.get('/diag')
 def diag():
     out = {}
     now = int(time.time())
+    nowms = int(time.time()*1000)
 
-    payload = {"iss":TOKEN, "aud":VALIDATE_URL, "iat":now, "exp":now+300, "sub":TOKEN}
+    # Sabemos: secret=string, kid no header, assinatura OK. Faltam "required fields".
+    # Testar metadados no PAYLOAD
+    p1 = {"method":"GET","uri":"/v3/devices","query-string":"$top=3","issuedAt":nowms}
+    out['meta_in_payload'] = dict(zip(['status','body'], validate(mk(p1, {}))))
 
-    # PyJWT com secret string (como exemplo da comunidade)
-    try:
-        t1 = pyjwt.encode(payload, SECRET, algorithm="HS256", headers={"kid":TOKEN})
-        out['pyjwt_string_kid'] = dict(zip(['status','body'], validate(t1)))
-    except Exception as e:
-        out['pyjwt_string_kid'] = {'error': str(e)[:100]}
+    # Metadados no payload + content-type
+    p2 = {"method":"GET","uri":"/v3/devices","query-string":"$top=3",
+          "content-type":"application/json","issuedAt":nowms}
+    out['meta_ct_payload'] = dict(zip(['status','body'], validate(mk(p2, {}))))
 
-    # PyJWT secret string sem kid
-    try:
-        t2 = pyjwt.encode(payload, SECRET, algorithm="HS256")
-        out['pyjwt_string_nokid'] = dict(zip(['status','body'], validate(t2)))
-    except Exception as e:
-        out['pyjwt_string_nokid'] = {'error': str(e)[:100]}
+    # Metadados no HEADER (estilo Manus) mas secret=string
+    hdr_meta = {"method":"GET","content-type":"application/json","uri":"/v3/devices",
+                "query-string":"$top=3","issuedAt":nowms}
+    out['meta_in_header'] = dict(zip(['status','body'], validate(mk({}, hdr_meta))))
 
-    # PyJWT com secret base64-decoded
-    try:
-        key = base64.b64decode(SECRET)
-        t3 = pyjwt.encode(payload, key, algorithm="HS256", headers={"kid":TOKEN})
-        out['pyjwt_b64_kid'] = dict(zip(['status','body'], validate(t3)))
-    except Exception as e:
-        out['pyjwt_b64_kid'] = {'error': str(e)[:100]}
+    # Claims JWT padrão
+    p4 = {"iss":TOKEN,"sub":TOKEN,"iat":now,"exp":now+300,"aud":VALIDATE_URL}
+    out['jwt_claims'] = dict(zip(['status','body'], validate(mk(p4, {}))))
 
-    # PyJWT header estilo Manus (metadados) + payload claims, secret base64
-    try:
-        key = base64.b64decode(SECRET)
-        hdr = {"kid":TOKEN, "method":"GET", "content-type":"application/json",
-               "uri":"/v3/devices", "query-string":"$top=3"}
-        t4 = pyjwt.encode(payload, key, algorithm="HS256", headers=hdr)
-        out['pyjwt_meta_b64'] = dict(zip(['status','body'], validate(t4)))
-    except Exception as e:
-        out['pyjwt_meta_b64'] = {'error': str(e)[:100]}
+    # issuedAt no header + payload vazio
+    out['issuedAt_header'] = dict(zip(['status','body'], validate(mk({}, {"issuedAt":nowms}))))
 
-    # PyJWT header Manus + secret string
-    try:
-        hdr = {"kid":TOKEN, "method":"GET", "content-type":"application/json",
-               "uri":"/v3/devices", "query-string":"$top=3"}
-        t5 = pyjwt.encode(payload, SECRET, algorithm="HS256", headers=hdr)
-        out['pyjwt_meta_string'] = dict(zip(['status','body'], validate(t5)))
-    except Exception as e:
-        out['pyjwt_meta_string'] = {'error': str(e)[:100]}
+    # Tudo: header com metadados completos + issuedAt
+    hdr_full = {"alg":"HS256","method":"GET","content-type":"application/json",
+                "uri":"/v3/devices","query-string":"$top=3","issuedAt":nowms}
+    out['header_full'] = dict(zip(['status','body'], validate(mk({}, hdr_full))))
 
     return jsonify(out)
 
