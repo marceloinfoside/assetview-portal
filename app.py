@@ -7,7 +7,6 @@ app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
 
 TOKEN = os.environ.get('ABSOLUTE_TOKEN_ID', '')
 SECRET = os.environ.get('ABSOLUTE_SECRET', '')
-HOST = os.environ.get('ABSOLUTE_HOST', 'api.absolute.com')
 
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
@@ -19,7 +18,7 @@ def b64url(data):
         data = data.encode('utf-8')
     return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
 
-def make_jws(method, path, query, secret_mode):
+def make_jws(method, path, query, host, secret_mode):
     issued_at = int(time.time() * 1000)
     jose = {
         "alg": "HS256",
@@ -30,41 +29,43 @@ def make_jws(method, path, query, secret_mode):
         "query-string": query,
         "issuedAt": issued_at
     }
-    encoded_header = b64url(jose)
-    encoded_payload = b64url({})
-    signing_input = f"{encoded_header}.{encoded_payload}"
-
-    if secret_mode == 'string':
-        key = SECRET.encode('utf-8')
-    else:  # base64 decoded
-        key = base64.b64decode(SECRET)
-
-    signature = hmac.new(key, signing_input.encode('utf-8'), hashlib.sha256).digest()
-    encoded_sig = b64url(signature)
-    return f"{encoded_header}.{encoded_payload}.{encoded_sig}", issued_at
-
-def try_request(path, query, secret_mode, auth_format):
-    jws, issued_at = make_jws('GET', path, query, secret_mode)
-    if auth_format == 'bearer':
-        auth = f"Bearer {jws}"
-    else:
-        auth = jws
-    headers = {'Authorization': auth, 'Content-Type': 'application/json'}
-    url = f'https://{HOST}{path}' + (f'?{query}' if query else '')
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        return r.status_code, r.text[:120]
-    except Exception as e:
-        return 'ERR', str(e)[:80]
+    eh = b64url(jose)
+    ep = b64url({})
+    si = f"{eh}.{ep}"
+    key = SECRET.encode('utf-8') if secret_mode == 'string' else base64.b64decode(SECRET)
+    sig = hmac.new(key, si.encode('utf-8'), hashlib.sha256).digest()
+    return f"{eh}.{ep}.{b64url(sig)}", issued_at
 
 @app.get('/diag')
 def diag():
     out = {}
     path, q = '/v3/devices', '$top=3'
-    for sm in ['string', 'base64']:
-        for af in ['bearer', 'plain']:
-            s, b = try_request(path, q, sm, af)
-            out[f'secret={sm}|{af}'] = {'status': s, 'body': b}
+
+    # TESTE A: Validar JWS no endpoint dedicado (US e CADC)
+    for host in ['api.us.absolute.com', 'api.absolute.com']:
+        for sm in ['string', 'base64']:
+            jws, _ = make_jws('GET', path, q, host, sm)
+            try:
+                r = requests.post(f'https://{host}/jws/validate',
+                                  data=jws,
+                                  headers={'Content-Type': 'text/plain'},
+                                  timeout=10)
+                out[f'validate_{host}_{sm}'] = {'status': r.status_code, 'body': r.text[:200]}
+            except Exception as e:
+                out[f'validate_{host}_{sm}'] = {'error': str(e)[:100]}
+
+    # TESTE B: Chamar /v3/devices no host US
+    for host in ['api.us.absolute.com', 'api.absolute.com']:
+        for sm in ['string', 'base64']:
+            jws, _ = make_jws('GET', path, q, host, sm)
+            try:
+                r = requests.get(f'https://{host}{path}?{q}',
+                                 headers={'Authorization': jws, 'Content-Type': 'application/json'},
+                                 timeout=10)
+                out[f'devices_{host}_{sm}'] = {'status': r.status_code, 'body': r.text[:100]}
+            except Exception as e:
+                out[f'devices_{host}_{sm}'] = {'error': str(e)[:100]}
+
     return jsonify(out)
 
 @app.post('/api/login')
@@ -88,7 +89,7 @@ def me():
 @app.get('/api/devices')
 def devices():
     if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
-    return jsonify({'devices':[], 'error':'Use /diag'})
+    return jsonify({'devices':[]})
 
 @app.get('/', defaults={'path':''})
 @app.get('/<path:path>')
