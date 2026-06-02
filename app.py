@@ -18,64 +18,49 @@ def b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip('=')
 
 def absolute_request(method, uri, query_string='', payload=None):
-    """
-    Fluxo oficial Absolute v3 (symmetric HS256):
-    - monta JWS com metadados no header JOSE
-    - payload wrapped em {"data": ...}
-    - POST do JWS (text/plain) para /jws/validate
-    - /jws/validate retorna os dados reais
-    """
     issued_at = int(time.time() * 1000)
-    header = {
-        "alg": "HS256",
-        "kid": TOKEN,
-        "method": method,
-        "content-type": "application/json",
-        "uri": uri,
-        "query-string": query_string,
-        "issuedAt": issued_at
-    }
-    # GET => payload vazio, mas sempre wrapped em "data"
+    header = {"alg":"HS256","kid":TOKEN,"method":method,"content-type":"application/json",
+              "uri":uri,"query-string":query_string,"issuedAt":issued_at}
     data_payload = {"data": payload if payload is not None else {}}
-
     h_b64 = b64url(json.dumps(header, separators=(',',':')).encode())
     p_b64 = b64url(json.dumps(data_payload, separators=(',',':')).encode())
     signing_input = f"{h_b64}.{p_b64}"
-    # secret como string UTF-8 (confirmado)
     sig = hmac.new(SECRET.encode('utf-8'), signing_input.encode(), hashlib.sha256).digest()
     jws = f"{signing_input}.{b64url(sig)}"
-
-    print(f'[Absolute] POST /jws/validate for {method} {uri}?{query_string}')
-    r = requests.post(VALIDATE_URL, data=jws,
-                      headers={'Content-Type':'text/plain'}, timeout=20)
-    print(f'[Absolute] Status {r.status_code}')
+    r = requests.post(VALIDATE_URL, data=jws, headers={'Content-Type':'text/plain'}, timeout=30)
     return r
 
-def fetch_devices(group_filter=None):
-    # Endpoint correto: /v3/reporting/devices
-    select = quote('esn,deviceName,systemModel,systemManufacturer,fullSystemName,'
-                   'username,agentStatus,lastConnectedUtc,localIp,publicIp,geoData', safe='')
-    qs = f'select={select}&pageSize=300'
-    if group_filter:
-        qs += '&' + quote(f"deviceGroupName={group_filter}", safe='=')
-
-    r = absolute_request('GET', '/v3/reporting/devices', qs)
-    if not r.ok:
-        return None, f'API {r.status_code}: {r.text[:200]}'
-    body = r.json()
-    devices = body.get('data', body) if isinstance(body, dict) else body
-    return devices, None
+def fetch_all_devices(group_filter=None):
+    """Busca todos os dispositivos com paginação"""
+    fields = ('esn,deviceName,fullSystemName,systemManufacturer,systemModel,serialNumber,'
+              'systemType,agentStatus,platformOSType,operatingSystem,username,currentUsername,'
+              'lastConnectedDateTimeUtc,geoData,localIpAddress,publicIpAddress,'
+              'totalPhysicalRamBytes,availablePhysicalRamBytes,volumes,cpu,policyGroupName,domain')
+    all_devices = []
+    next_page = None
+    for _ in range(20):  # máx 20 páginas (~2000 devices)
+        qs = f'select={quote(fields, safe="")}&pageSize=100'
+        if group_filter:
+            qs += f'&policyGroupName={quote(group_filter, safe="")}'
+        if next_page:
+            qs += f'&nextPage={quote(next_page, safe="")}'
+        r = absolute_request('GET', '/v3/reporting/devices', qs)
+        if not r.ok:
+            if all_devices:
+                break
+            return None, f'API {r.status_code}: {r.text[:200]}'
+        body = r.json()
+        page = body.get('data', [])
+        all_devices.extend(page)
+        next_page = body.get('metadata', {}).get('pagination', {}).get('nextPage')
+        if not next_page or not page:
+            break
+    return all_devices, None
 
 @app.get('/diag')
 def diag():
-    r = absolute_request('GET', '/v3/reporting/devices', 'pageSize=1')
-    try:
-        data = r.json().get('data', [])
-        if data:
-            return jsonify({'status': r.status_code, 'campos': sorted(data[0].keys())})
-    except:
-        pass
-    return jsonify({'status': r.status_code, 'body': r.text[:600]})
+    r = absolute_request('GET', '/v3/reporting/devices', 'pageSize=2')
+    return jsonify({'status': r.status_code, 'body': r.text[:400]})
 
 @app.post('/api/login')
 def login():
@@ -100,7 +85,7 @@ def devices():
     if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
     u = session['user']
     group = request.args.get('group') if u['isAdmin'] else u['group_filter']
-    devs, err = fetch_devices(group)
+    devs, err = fetch_all_devices(group)
     if err:
         return jsonify({'error': err}), 500
     return jsonify({'devices': devs})
