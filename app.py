@@ -1,173 +1,94 @@
-import hmac
-import hashlib
-import datetime
-import os
-from functools import wraps
-
+import hmac, hashlib, datetime, os
 import requests
 from flask import Flask, request, jsonify, session, send_from_directory
+from functools import wraps
 
 app = Flask(__name__, static_folder='public', static_url_path='')
-app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret-mude')
+app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
 
-ABSOLUTE_TOKEN_ID = os.environ.get('ABSOLUTE_TOKEN_ID', '')
-ABSOLUTE_SECRET   = os.environ.get('ABSOLUTE_SECRET', '')
-ABSOLUTE_HOST     = os.environ.get('ABSOLUTE_HOST', 'api.absolute.com')
+TOKEN = os.environ.get('ABSOLUTE_TOKEN_ID', '')
+SECRET = os.environ.get('ABSOLUTE_SECRET', '')
+HOST = os.environ.get('ABSOLUTE_HOST', 'api.absolute.com')
 
-USERS = {
-    'admin': {
-        'password':     os.environ.get('ADMIN_PASSWORD', 'admin123'),
-        'name':         'Administrador',
-        'group_filter': None,
-        'is_admin':     True,
-    }
-}
+USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
+                   'name':'Administrador','group_filter':None,'is_admin':True}}
 
-# ── URL encode específico do Absolute (do módulo oficial) ──────
-def _url_encode(value):
-    value = value.replace('$', '%24')
-    value = value.replace(' ', '%20')
-    value = value.replace("'", '%27')
-    value = value.replace('(', '%28')
-    value = value.replace(')', '%29')
-    value = value.replace(',', '%2C')
-    value = value.replace(':', '%3A')
-    return value
+def enc(v):
+    for a,b in [('$','%24'),(' ','%20'),("'",'%27'),('(','%28'),(')','%29'),(',','%2C'),(':','%3A')]:
+        v = v.replace(a,b)
+    return v
 
-# ── Requisição assinada ao Absolute (implementação oficial) ────
-def absolute_request(path, query='', method='GET', body=''):
-    content_type = 'application/json;charset=utf-8'
+def call(path, query, content_type, header_order):
     date = datetime.datetime.utcnow()
-    date_yyyymmdd = date.strftime('%Y%m%d')
-    x_abs_date    = date_yyyymmdd + 'T' + date.strftime('%H%M%S') + 'Z'
+    dymd = date.strftime('%Y%m%d')
+    xdate = dymd + 'T' + date.strftime('%H%M%S') + 'Z'
+    body = ''
+    bhash = hashlib.sha256(body.encode()).hexdigest()
 
-    # Canonical request — ORDEM: host, content-type, x-abs-date
-    canonical = (
-        method.upper() + '\n' +
-        path + '\n' +
-        _url_encode(query) + '\n' +
-        'host:' + ABSOLUTE_HOST + '\n' +
-        'content-type:' + content_type + '\n' +
-        'x-abs-date:' + x_abs_date + '\n' +
-        hashlib.sha256(body.encode('utf-8')).hexdigest()
-    )
-
-    req_hash = hashlib.sha256(canonical.encode('utf-8')).hexdigest()
-
-    if ABSOLUTE_HOST == 'api.us.absolute.com':
-        scope = date_yyyymmdd + '/usdc/abs1'
-    elif ABSOLUTE_HOST == 'api.eu.absolute.com':
-        scope = date_yyyymmdd + '/eudc/abs1'
+    if header_order == 'host_first':
+        ch = f'host:{HOST}\ncontent-type:{content_type}\nx-abs-date:{xdate}\n'
     else:
-        scope = date_yyyymmdd + '/cadc/abs1'
+        ch = f'content-type:{content_type}\nhost:{HOST}\nx-abs-date:{xdate}\n'
 
-    string_to_sign = 'ABS1-HMAC-SHA-256\n' + x_abs_date + '\n' + scope + '\n' + req_hash
+    canon = f'GET\n{path}\n{enc(query)}\n{ch}{bhash}'
+    rhash = hashlib.sha256(canon.encode()).hexdigest()
+    scope = dymd + '/cadc/abs1'
+    sts = f'ABS1-HMAC-SHA-256\n{xdate}\n{scope}\n{rhash}'
+    ks = ('ABS1'+SECRET).encode()
+    kd = hmac.new(ks, dymd.encode(), hashlib.sha256).digest()
+    sk = hmac.new(kd, b'abs1_request', hashlib.sha256).digest()
+    sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
 
-    ksecret    = ('ABS1' + ABSOLUTE_SECRET).encode('utf-8')
-    kdate      = hmac.new(ksecret, date_yyyymmdd.encode('utf-8'), hashlib.sha256).digest()
-    signingkey = hmac.new(kdate, 'abs1_request'.encode('utf-8'), hashlib.sha256).digest()
-    signature  = hmac.new(signingkey, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
-
-    credentials = ABSOLUTE_TOKEN_ID + '/' + scope
-    headers = {
-        'host':          ABSOLUTE_HOST,
-        'Content-Type':  content_type,
-        'x-abs-date':    x_abs_date,
-        'Authorization': 'ABS1-HMAC-SHA-256 Credential=' + credentials +
-                         ', SignedHeaders=host;content-type;x-abs-date, Signature=' + signature,
-    }
-
-    url = 'https://' + ABSOLUTE_HOST + path
-    if query:
-        url += '?' + _url_encode(query)
-
-    print(f'[Absolute] GET {url}')
-    if method.upper() == 'GET':
-        resp = requests.get(url, headers=headers, timeout=20)
-    elif method.upper() == 'POST':
-        resp = requests.post(url, data=body, headers=headers, timeout=20)
-    else:
-        resp = requests.put(url, data=body, headers=headers, timeout=20)
-
-    print(f'[Absolute] Status {resp.status_code}')
-    return resp
-
-# ── Buscar dispositivos (usa v3/devices) ───────────────────────
-def fetch_devices(group_filter=None):
-    select = ('$select=id,esn,systemName,username,systemModel,serial,osName,'
-              'osVersion,lastConnectedUtc,geoData,systemDiskInfo,memoryInfo,'
-              'cpuInfo,groupName,agentStatus')
-    parts = [select, '$top=300']
-    if group_filter:
-        parts.append(f"$filter=groupName eq '{group_filter}'")
-    query = '&'.join(parts)
-
-    resp = absolute_request('/v3/devices', query, 'GET', '')
-    if not resp.ok:
-        return None, f'API {resp.status_code}: {resp.text[:200]}'
-    data = resp.json()
-    devices = data if isinstance(data, list) else data.get('value', data)
-    return devices, None
-
-# ── Auth ───────────────────────────────────────────────────────
-def login_required(f):
-    @wraps(f)
-    def dec(*a, **k):
-        if 'user' not in session:
-            return jsonify({'error': 'Não autenticado'}), 401
-        return f(*a, **k)
-    return dec
-
-@app.post('/api/login')
-def api_login():
-    data = request.get_json()
-    user = USERS.get(data.get('username', '').strip())
-    if not user or user['password'] != data.get('password', ''):
-        return jsonify({'error': 'Usuário ou senha inválidos'}), 401
-    session['user'] = {'name': user['name'], 'isAdmin': user['is_admin'],
-                       'group_filter': user['group_filter']}
-    return jsonify({'success': True, 'name': user['name'], 'isAdmin': user['is_admin']})
-
-@app.post('/api/logout')
-def api_logout():
-    session.clear()
-    return jsonify({'success': True})
-
-@app.get('/api/me')
-def api_me():
-    if 'user' not in session:
-        return jsonify({'error': 'Não autenticado'}), 401
-    return jsonify(session['user'])
-
-@app.get('/api/devices')
-@login_required
-def api_devices():
-    u = session['user']
-    group = request.args.get('group') if u['isAdmin'] else u['group_filter']
-    devices, err = fetch_devices(group)
-    if err:
-        return jsonify({'error': err}), 500
-    return jsonify({'devices': devices})
+    headers = {'host':HOST,'Content-Type':content_type,'x-abs-date':xdate,
+               'Authorization':f'ABS1-HMAC-SHA-256 Credential={TOKEN}/{scope}, SignedHeaders=host;content-type;x-abs-date, Signature={sig}'}
+    url = f'https://{HOST}{path}' + (f'?{enc(query)}' if query else '')
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        return r.status_code, r.text[:80]
+    except Exception as e:
+        return 'ERR', str(e)[:80]
 
 @app.get('/diag')
 def diag():
     out = {}
-    # Teste 1: v3 sem query
-    r1 = absolute_request('/v3/devices', '', 'GET', '')
-    out['v3_no_query'] = {'status': r1.status_code, 'body': r1.text[:150]}
-    # Teste 2: v3 só com top
-    r2 = absolute_request('/v3/devices', '$top=3', 'GET', '')
-    out['v3_top'] = {'status': r2.status_code, 'body': r2.text[:150]}
-    # Teste 3: v3 com select simples
-    r3 = absolute_request('/v3/devices', '$select=esn,systemName&$top=3', 'GET', '')
-    out['v3_select'] = {'status': r3.status_code, 'body': r3.text[:150]}
+    cts = ['application/json', 'application/json;charset=utf-8']
+    for ct in cts:
+        for ho in ['host_first', 'ct_first']:
+            for path, q in [('/v3/devices','$top=3'), ('/v2/reporting/devices','$top=3')]:
+                s, b = call(path, q, ct, ho)
+                ver = 'v3' if 'v3' in path else 'v2'
+                key = f'{ver}|ct={"plain" if ct=="application/json" else "utf8"}|{ho}'
+                out[key] = {'status': s, 'body': b}
     return jsonify(out)
 
-@app.get('/', defaults={'path': ''})
+@app.post('/api/login')
+def login():
+    d = request.get_json()
+    u = USERS.get(d.get('username','').strip())
+    if not u or u['password'] != d.get('password',''):
+        return jsonify({'error':'Inválido'}), 401
+    session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group_filter']}
+    return jsonify({'success':True,'name':u['name'],'isAdmin':u['is_admin']})
+
+@app.post('/api/logout')
+def logout():
+    session.clear()
+    return jsonify({'success':True})
+
+@app.get('/api/me')
+def me():
+    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    return jsonify(session['user'])
+
+@app.get('/api/devices')
+def devices():
+    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    return jsonify({'devices':[], 'error':'Use /diag'})
+
+@app.get('/', defaults={'path':''})
 @app.get('/<path:path>')
 def serve(path):
-    return send_from_directory('public', 'index.html')
+    return send_from_directory('public','index.html')
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 3000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT',3000)))
