@@ -68,7 +68,13 @@ def fetch_devices(group_filter=None):
 
 @app.get('/diag')
 def diag():
-    r = absolute_request('GET', '/v3/reporting/devices', 'pageSize=3')
+    r = absolute_request('GET', '/v3/reporting/devices', 'pageSize=1')
+    try:
+        data = r.json().get('data', [])
+        if data:
+            return jsonify({'status': r.status_code, 'campos': sorted(data[0].keys())})
+    except:
+        pass
     return jsonify({'status': r.status_code, 'body': r.text[:600]})
 
 @app.post('/api/login')
