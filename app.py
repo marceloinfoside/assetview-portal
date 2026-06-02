@@ -1,4 +1,4 @@
-import time, os
+import time, os, json
 import jwt as pyjwt
 import requests
 from flask import Flask, request, jsonify, session, send_from_directory
@@ -9,45 +9,59 @@ app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
 TOKEN = os.environ.get('ABSOLUTE_TOKEN_ID', '')
 SECRET = os.environ.get('ABSOLUTE_SECRET', '')
 HOST = 'api.absolute.com'
+VURL = f'https://{HOST}/jws/validate'
 
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
 
-def mk_jws(method, uri, query):
-    nowms = int(time.time()*1000)
-    headers = {"kid": TOKEN}
-    # metadados no payload (header causou 403)
-    payload = {
-        "method": method,
-        "uri": uri,
-        "query-string": query,
-        "content-type": "application/json",
-        "issuedAt": nowms
-    }
-    return pyjwt.encode(payload, SECRET, algorithm="HS256", headers=headers)
+def mk(payload, extra_hdr=None):
+    h = {"kid": TOKEN}
+    if extra_hdr: h.update(extra_hdr)
+    return pyjwt.encode(payload, SECRET, algorithm="HS256", headers=h)
 
-def call_devices(method, uri, query, auth_style):
-    jws = mk_jws(method, uri, query)
-    if auth_style == 'bearer':
-        auth = f"Bearer {jws}"
-    else:
-        auth = jws
-    url = f'https://{HOST}{uri}' + (f'?{query}' if query else '')
+def post_validate(jws, mode):
     try:
-        r = requests.get(url, headers={'Authorization': auth, 'Content-Type':'application/json'}, timeout=12)
+        if mode == 'json_assertion':
+            r = requests.post(VURL, json={"assertion": jws}, timeout=10)
+        elif mode == 'form_assertion':
+            r = requests.post(VURL, data={"assertion": jws}, timeout=10)
+        else:  # raw
+            r = requests.post(VURL, data=jws, headers={'Content-Type':'text/plain'}, timeout=10)
         return r.status_code, r.text[:200]
     except Exception as e:
-        return 'ERR', str(e)[:100]
+        return 'ERR', str(e)[:80]
 
 @app.get('/diag')
 def diag():
     out = {}
-    # Chamar /v3/devices direto com a assinatura correta
-    out['v3_bearer'] = dict(zip(['status','body'], call_devices('GET','/v3/devices','$top=3','bearer')))
-    out['v3_plain']  = dict(zip(['status','body'], call_devices('GET','/v3/devices','$top=3','plain')))
-    # Sem query
-    out['v3_noquery_bearer'] = dict(zip(['status','body'], call_devices('GET','/v3/devices','','bearer')))
-    out['v3_noquery_plain']  = dict(zip(['status','body'], call_devices('GET','/v3/devices','','plain')))
+    now = int(time.time())
+    nowms = int(time.time()*1000)
+
+    # Combinações de campos que a doc pode exigir
+    # Tentar method+uri+issuedAt como raw text
+    p_full = {"method":"GET","uri":"/v3/devices","query-string":"$top=3",
+              "content-type":"application/json","issuedAt":nowms}
+    jws_full = mk(p_full)
+
+    out['raw_full'] = dict(zip(['status','body'], post_validate(jws_full, 'raw')))
+    out['json_assertion_full'] = dict(zip(['status','body'], post_validate(jws_full, 'json_assertion')))
+    out['form_assertion_full'] = dict(zip(['status','body'], post_validate(jws_full, 'form_assertion')))
+
+    # Variação: data como segundos (não ms)
+    p_sec = {"method":"GET","uri":"/v3/devices","query-string":"$top=3",
+             "content-type":"application/json","issuedAt":now}
+    out['raw_issuedAt_sec'] = dict(zip(['status','body'], post_validate(mk(p_sec), 'raw')))
+
+    # Variação: campos com nomes alternativos
+    p_alt = {"httpMethod":"GET","requestUri":"/v3/devices","queryString":"$top=3","issuedAt":nowms}
+    out['raw_altnames'] = dict(zip(['status','body'], post_validate(mk(p_alt), 'raw')))
+
+    # Variação: data como ISO string
+    iso = time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+    p_iso = {"method":"GET","uri":"/v3/devices","query-string":"$top=3",
+             "content-type":"application/json","issuedAt":iso}
+    out['raw_iso'] = dict(zip(['status','body'], post_validate(mk(p_iso), 'raw')))
+
     return jsonify(out)
 
 @app.post('/api/login')
