@@ -13,39 +13,45 @@ HOST = 'api.absolute.com'
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
 
-def build_jws(uri, qs_in_header):
-    issued_at = int(time.time() * 1000)
-    jose = {"alg":"HS256","kid":TOKEN,"method":"GET","content-type":"application/json",
-            "uri":uri,"query-string":qs_in_header,"issuedAt":issued_at}
-    return pyjwt.encode({}, SECRET, algorithm="HS256", headers=jose)
-
-def test(uri, qs_header, qs_url, auth_prefix=''):
-    jws = build_jws(uri, qs_header)
-    url = f'https://{HOST}{uri}' + (f'?{qs_url}' if qs_url else '')
-    auth = (auth_prefix + jws) if auth_prefix else jws
-    try:
-        r = requests.get(url, headers={'Authorization':auth,'Content-Type':'application/json'}, timeout=12)
-        return r.status_code, r.text[:120]
-    except Exception as e:
-        return 'ERR', str(e)[:80]
-
 @app.get('/diag')
 def diag():
     out = {}
     uri = '/v3/devices'
+    qs = '%24top=3'
+    issued_at = int(time.time() * 1000)
+    jose = {"alg":"HS256","kid":TOKEN,"method":"GET","content-type":"application/json",
+            "uri":uri,"query-string":qs,"issuedAt":issued_at}
+    jws = pyjwt.encode({}, SECRET, algorithm="HS256", headers=jose)
 
-    # A: header e url ambos "$top=3" (não encoded)
-    out['both_plain'] = dict(zip(['status','body'], test(uri, '$top=3', '$top=3')))
-    # B: header e url ambos "%24top=3" (encoded)
-    out['both_encoded'] = dict(zip(['status','body'], test(uri, '%24top=3', '%24top=3')))
-    # C: header plain, url encoded
-    out['hdr_plain_url_enc'] = dict(zip(['status','body'], test(uri, '$top=3', '%24top=3')))
-    # D: header encoded, url plain
-    out['hdr_enc_url_plain'] = dict(zip(['status','body'], test(uri, '%24top=3', '$top=3')))
-    # E: sem query nenhuma
-    out['no_query'] = dict(zip(['status','body'], test(uri, '', '')))
-    # F: com Bearer prefix
-    out['bearer_both_plain'] = dict(zip(['status','body'], test(uri, '$top=3', '$top=3', 'Bearer ')))
+    out['jws_preview'] = jws[:60] + '...'
+
+    # 1. Mandar ESSE JWS pro /jws/validate
+    try:
+        r = requests.post(f'https://{HOST}/jws/validate', data=jws,
+                         headers={'Content-Type':'text/plain'}, timeout=10)
+        out['validate'] = {'status': r.status_code, 'body': r.text[:200]}
+    except Exception as e:
+        out['validate'] = {'error': str(e)[:80]}
+
+    # 2. Mandar o MESMO JWS pro /v3/devices
+    try:
+        r = requests.get(f'https://{HOST}{uri}?{qs}',
+                        headers={'Authorization':jws,'Content-Type':'application/json'}, timeout=10)
+        out['v3_devices'] = {'status': r.status_code, 'body': r.text[:200],
+                             'resp_headers': dict(list(r.headers.items())[:6])}
+    except Exception as e:
+        out['v3_devices'] = {'error': str(e)[:80]}
+
+    # 3. Testar outros endpoints v3 que talvez tenham permissão diferente
+    for ep in ['/v3/reporting/devices', '/v2/devices', '/v3/device-fields']:
+        try:
+            j2 = pyjwt.encode({}, SECRET, algorithm="HS256",
+                              headers={**jose, "uri":ep, "query-string":""})
+            r = requests.get(f'https://{HOST}{ep}',
+                           headers={'Authorization':j2,'Content-Type':'application/json'}, timeout=10)
+            out[f'ep_{ep}'] = {'status': r.status_code, 'body': r.text[:100]}
+        except Exception as e:
+            out[f'ep_{ep}'] = {'error': str(e)[:60]}
 
     return jsonify(out)
 
