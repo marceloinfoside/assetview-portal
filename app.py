@@ -151,8 +151,17 @@ def api_devices():
 
 @app.get('/diag')
 def diag():
-    resp = absolute_request('/v3/devices', '$top=3', 'GET', '')
-    return jsonify({'status': resp.status_code, 'body': resp.text[:500]})
+    out = {}
+    # Teste 1: v3 sem query
+    r1 = absolute_request('/v3/devices', '', 'GET', '')
+    out['v3_no_query'] = {'status': r1.status_code, 'body': r1.text[:150]}
+    # Teste 2: v3 só com top
+    r2 = absolute_request('/v3/devices', '$top=3', 'GET', '')
+    out['v3_top'] = {'status': r2.status_code, 'body': r2.text[:150]}
+    # Teste 3: v3 com select simples
+    r3 = absolute_request('/v3/devices', '$select=esn,systemName&$top=3', 'GET', '')
+    out['v3_select'] = {'status': r3.status_code, 'body': r3.text[:150]}
+    return jsonify(out)
 
 @app.get('/', defaults={'path': ''})
 @app.get('/<path:path>')
