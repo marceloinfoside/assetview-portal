@@ -1,4 +1,5 @@
-import hmac, hashlib, json, time, base64, os
+import time, base64, os, json
+import jwt as pyjwt
 import requests
 from flask import Flask, request, jsonify, session, send_from_directory
 
@@ -8,25 +9,14 @@ app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
 TOKEN = os.environ.get('ABSOLUTE_TOKEN_ID', '')
 SECRET = os.environ.get('ABSOLUTE_SECRET', '')
 HOST = 'api.absolute.com'
+VALIDATE_URL = f'https://{HOST}/jws/validate'
 
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
 
-def b64url(data):
-    if isinstance(data, dict):
-        data = json.dumps(data, separators=(',', ':')).encode('utf-8')
-    elif isinstance(data, str):
-        data = data.encode('utf-8')
-    return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
-
-def sign_jws(header, payload, key):
-    si = f"{b64url(header)}.{b64url(payload)}"
-    sig = b64url(hmac.new(key, si.encode(), hashlib.sha256).digest())
-    return f"{si}.{sig}"
-
 def validate(jws):
     try:
-        r = requests.post(f'https://{HOST}/jws/validate', data=jws,
+        r = requests.post(VALIDATE_URL, data=jws,
                          headers={'Content-Type':'text/plain'}, timeout=10)
         return r.status_code, r.text[:150]
     except Exception as e:
@@ -35,26 +25,50 @@ def validate(jws):
 @app.get('/diag')
 def diag():
     out = {}
-    now_ms = int(time.time() * 1000)
-    jose = {"alg":"HS256","kid":TOKEN,"method":"GET","content-type":"application/json",
-            "uri":"/v3/devices","query-string":"$top=3","issuedAt":now_ms}
+    now = int(time.time())
 
-    # Diferentes formas de derivar a chave HMAC
-    keys = {
-        'b64decode': base64.b64decode(SECRET),
-        'ABS1+b64decode': b'ABS1' + base64.b64decode(SECRET),
-        'ABS1+string': ('ABS1'+SECRET).encode(),
-        'string_utf8': SECRET.encode('utf-8'),
-        'b64url_decode': base64.urlsafe_b64decode(SECRET + '=='),
-        'hex_decode': bytes.fromhex(SECRET) if all(c in '0123456789abcdefABCDEF' for c in SECRET) else b'',
-    }
+    payload = {"iss":TOKEN, "aud":VALIDATE_URL, "iat":now, "exp":now+300, "sub":TOKEN}
 
-    for kname, key in keys.items():
-        if not key:
-            out[kname] = {'status':'skip','body':'chave vazia'}
-            continue
-        jws = sign_jws(jose, {}, key)
-        out[kname] = dict(zip(['status','body'], validate(jws)))
+    # PyJWT com secret string (como exemplo da comunidade)
+    try:
+        t1 = pyjwt.encode(payload, SECRET, algorithm="HS256", headers={"kid":TOKEN})
+        out['pyjwt_string_kid'] = dict(zip(['status','body'], validate(t1)))
+    except Exception as e:
+        out['pyjwt_string_kid'] = {'error': str(e)[:100]}
+
+    # PyJWT secret string sem kid
+    try:
+        t2 = pyjwt.encode(payload, SECRET, algorithm="HS256")
+        out['pyjwt_string_nokid'] = dict(zip(['status','body'], validate(t2)))
+    except Exception as e:
+        out['pyjwt_string_nokid'] = {'error': str(e)[:100]}
+
+    # PyJWT com secret base64-decoded
+    try:
+        key = base64.b64decode(SECRET)
+        t3 = pyjwt.encode(payload, key, algorithm="HS256", headers={"kid":TOKEN})
+        out['pyjwt_b64_kid'] = dict(zip(['status','body'], validate(t3)))
+    except Exception as e:
+        out['pyjwt_b64_kid'] = {'error': str(e)[:100]}
+
+    # PyJWT header estilo Manus (metadados) + payload claims, secret base64
+    try:
+        key = base64.b64decode(SECRET)
+        hdr = {"kid":TOKEN, "method":"GET", "content-type":"application/json",
+               "uri":"/v3/devices", "query-string":"$top=3"}
+        t4 = pyjwt.encode(payload, key, algorithm="HS256", headers=hdr)
+        out['pyjwt_meta_b64'] = dict(zip(['status','body'], validate(t4)))
+    except Exception as e:
+        out['pyjwt_meta_b64'] = {'error': str(e)[:100]}
+
+    # PyJWT header Manus + secret string
+    try:
+        hdr = {"kid":TOKEN, "method":"GET", "content-type":"application/json",
+               "uri":"/v3/devices", "query-string":"$top=3"}
+        t5 = pyjwt.encode(payload, SECRET, algorithm="HS256", headers=hdr)
+        out['pyjwt_meta_string'] = dict(zip(['status','body'], validate(t5)))
+    except Exception as e:
+        out['pyjwt_meta_string'] = {'error': str(e)[:100]}
 
     return jsonify(out)
 
