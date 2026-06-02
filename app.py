@@ -9,57 +9,45 @@ app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
 TOKEN = os.environ.get('ABSOLUTE_TOKEN_ID', '')
 SECRET = os.environ.get('ABSOLUTE_SECRET', '')
 HOST = 'api.absolute.com'
-VALIDATE_URL = f'https://{HOST}/jws/validate'
 
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
 
-def validate(jws):
+def mk_jws(method, uri, query):
+    nowms = int(time.time()*1000)
+    headers = {"kid": TOKEN}
+    # metadados no payload (header causou 403)
+    payload = {
+        "method": method,
+        "uri": uri,
+        "query-string": query,
+        "content-type": "application/json",
+        "issuedAt": nowms
+    }
+    return pyjwt.encode(payload, SECRET, algorithm="HS256", headers=headers)
+
+def call_devices(method, uri, query, auth_style):
+    jws = mk_jws(method, uri, query)
+    if auth_style == 'bearer':
+        auth = f"Bearer {jws}"
+    else:
+        auth = jws
+    url = f'https://{HOST}{uri}' + (f'?{query}' if query else '')
     try:
-        r = requests.post(VALIDATE_URL, data=jws,
-                         headers={'Content-Type':'text/plain'}, timeout=10)
+        r = requests.get(url, headers={'Authorization': auth, 'Content-Type':'application/json'}, timeout=12)
         return r.status_code, r.text[:200]
     except Exception as e:
-        return 'ERR', str(e)[:80]
-
-def mk(payload, headers):
-    h = {"kid": TOKEN}
-    h.update(headers)
-    return pyjwt.encode(payload, SECRET, algorithm="HS256", headers=h)
+        return 'ERR', str(e)[:100]
 
 @app.get('/diag')
 def diag():
     out = {}
-    now = int(time.time())
-    nowms = int(time.time()*1000)
-
-    # Sabemos: secret=string, kid no header, assinatura OK. Faltam "required fields".
-    # Testar metadados no PAYLOAD
-    p1 = {"method":"GET","uri":"/v3/devices","query-string":"$top=3","issuedAt":nowms}
-    out['meta_in_payload'] = dict(zip(['status','body'], validate(mk(p1, {}))))
-
-    # Metadados no payload + content-type
-    p2 = {"method":"GET","uri":"/v3/devices","query-string":"$top=3",
-          "content-type":"application/json","issuedAt":nowms}
-    out['meta_ct_payload'] = dict(zip(['status','body'], validate(mk(p2, {}))))
-
-    # Metadados no HEADER (estilo Manus) mas secret=string
-    hdr_meta = {"method":"GET","content-type":"application/json","uri":"/v3/devices",
-                "query-string":"$top=3","issuedAt":nowms}
-    out['meta_in_header'] = dict(zip(['status','body'], validate(mk({}, hdr_meta))))
-
-    # Claims JWT padrão
-    p4 = {"iss":TOKEN,"sub":TOKEN,"iat":now,"exp":now+300,"aud":VALIDATE_URL}
-    out['jwt_claims'] = dict(zip(['status','body'], validate(mk(p4, {}))))
-
-    # issuedAt no header + payload vazio
-    out['issuedAt_header'] = dict(zip(['status','body'], validate(mk({}, {"issuedAt":nowms}))))
-
-    # Tudo: header com metadados completos + issuedAt
-    hdr_full = {"alg":"HS256","method":"GET","content-type":"application/json",
-                "uri":"/v3/devices","query-string":"$top=3","issuedAt":nowms}
-    out['header_full'] = dict(zip(['status','body'], validate(mk({}, hdr_full))))
-
+    # Chamar /v3/devices direto com a assinatura correta
+    out['v3_bearer'] = dict(zip(['status','body'], call_devices('GET','/v3/devices','$top=3','bearer')))
+    out['v3_plain']  = dict(zip(['status','body'], call_devices('GET','/v3/devices','$top=3','plain')))
+    # Sem query
+    out['v3_noquery_bearer'] = dict(zip(['status','body'], call_devices('GET','/v3/devices','','bearer')))
+    out['v3_noquery_plain']  = dict(zip(['status','body'], call_devices('GET','/v3/devices','','plain')))
     return jsonify(out)
 
 @app.post('/api/login')
