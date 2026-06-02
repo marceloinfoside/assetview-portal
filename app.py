@@ -1,5 +1,7 @@
-import hmac, hashlib, datetime, os
+import hmac, hashlib, datetime, os, ssl
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 from flask import Flask, request, jsonify, session, send_from_directory
 
 app = Flask(__name__, static_folder='public', static_url_path='')
@@ -12,18 +14,26 @@ HOST = os.environ.get('ABSOLUTE_HOST', 'api.absolute.com')
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
 
+# Forçar TLS 1.2 (Absolute exige TLS 1.2)
+class TLS12Adapter(HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context()
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        kwargs['ssl_context'] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
 def enc(v):
     for a,b in [('$','%24'),(' ','%20'),("'",'%27'),('(','%28'),(')','%29'),(',','%2C'),(':','%3A')]:
         v = v.replace(a,b)
     return v
 
-def sign(path, query, extra_headers=None):
+def build(path, query):
     date = datetime.datetime.utcnow()
     dymd = date.strftime('%Y%m%d')
     xdate = dymd + 'T' + date.strftime('%H%M%S') + 'Z'
     bhash = hashlib.sha256(b'').hexdigest()
-    ch = f'content-type:application/json\nhost:{HOST}\nx-abs-date:{xdate}\n'
-    canon = f'GET\n{path}\n{enc(query)}\n{ch}{bhash}'
+    canon = f'GET\n{path}\n{enc(query)}\nhost:{HOST}\ncontent-type:application/json\nx-abs-date:{xdate}\n{bhash}'
     rhash = hashlib.sha256(canon.encode()).hexdigest()
     scope = dymd + '/cadc/abs1'
     sts = f'ABS1-HMAC-SHA-256\n{xdate}\n{scope}\n{rhash}'
@@ -33,48 +43,39 @@ def sign(path, query, extra_headers=None):
     sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
     headers = {'host':HOST,'Content-Type':'application/json','x-abs-date':xdate,
                'Authorization':f'ABS1-HMAC-SHA-256 Credential={TOKEN}/{scope}, SignedHeaders=host;content-type;x-abs-date, Signature={sig}'}
-    if extra_headers:
-        headers.update(extra_headers)
-    url = f'https://{HOST}{path}' + (f'?{enc(query)}' if query else '')
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        return r.status_code, r.text[:100]
-    except Exception as e:
-        return 'ERR', str(e)[:80]
+    return headers, canon, xdate, sig
 
 @app.get('/diag')
 def diag():
     out = {}
     path, q = '/v3/devices', '$top=3'
-    # Teste 1: sem extras (baseline)
-    out['baseline'] = dict(zip(['status','body'], sign(path, q)))
-    # Teste 2: com User-Agent
-    out['user_agent'] = dict(zip(['status','body'], sign(path, q, {'User-Agent':'AssetView/1.0'})))
-    # Teste 3: com Accept
-    out['accept'] = dict(zip(['status','body'], sign(path, q, {'Accept':'application/json'})))
-    # Teste 4: UA + Accept
-    out['ua_accept'] = dict(zip(['status','body'], sign(path, q, {'User-Agent':'Mozilla/5.0','Accept':'application/json'})))
-    # Teste 5: requests default UA (remove host header manual)
-    date = datetime.datetime.utcnow()
-    dymd = date.strftime('%Y%m%d')
-    xdate = dymd + 'T' + date.strftime('%H%M%S') + 'Z'
-    bhash = hashlib.sha256(b'').hexdigest()
-    ch = f'content-type:application/json\nhost:{HOST}\nx-abs-date:{xdate}\n'
-    canon = f'GET\n{path}\n{enc(q)}\n{ch}{bhash}'
-    rhash = hashlib.sha256(canon.encode()).hexdigest()
-    scope = dymd + '/cadc/abs1'
-    sts = f'ABS1-HMAC-SHA-256\n{xdate}\n{scope}\n{rhash}'
-    ks = ('ABS1'+SECRET).encode()
-    kd = hmac.new(ks, dymd.encode(), hashlib.sha256).digest()
-    sk = hmac.new(kd, b'abs1_request', hashlib.sha256).digest()
-    sig = hmac.new(sk, sts.encode(), hashlib.sha256).hexdigest()
-    h2 = {'Content-Type':'application/json','x-abs-date':xdate,
-          'Authorization':f'ABS1-HMAC-SHA-256 Credential={TOKEN}/{scope}, SignedHeaders=host;content-type;x-abs-date, Signature={sig}'}
+    headers, canon, xdate, sig = build(path, q)
+    url = f'https://{HOST}{path}?{enc(q)}'
+
+    # Tentativa COM TLS 1.2 forçado
     try:
-        r = requests.get(f'https://{HOST}{path}?{enc(q)}', headers=h2, timeout=10)
-        out['no_manual_host'] = {'status': r.status_code, 'body': r.text[:100]}
+        s = requests.Session()
+        s.mount('https://', TLS12Adapter())
+        r = s.get(url, headers=headers, timeout=10)
+        out['tls12_forced'] = {'status': r.status_code, 'body': r.text[:100]}
     except Exception as e:
-        out['no_manual_host'] = {'status':'ERR','body':str(e)[:80]}
+        out['tls12_forced'] = {'error': str(e)[:120]}
+
+    # Tentativa normal
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        out['normal'] = {'status': r.status_code, 'body': r.text[:100]}
+    except Exception as e:
+        out['normal'] = {'error': str(e)[:120]}
+
+    # Dados para Authentication Debugging do Absolute
+    out['debug_info'] = {
+        'tokenID': TOKEN,
+        'X-Abs-Date': xdate,
+        'Signature': sig,
+        'CanonicalRequest': canon,
+        'server_utc_now': datetime.datetime.utcnow().isoformat(),
+    }
     return jsonify(out)
 
 @app.post('/api/login')
