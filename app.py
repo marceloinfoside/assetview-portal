@@ -7,6 +7,7 @@ app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
 
 TOKEN = os.environ.get('ABSOLUTE_TOKEN_ID', '')
 SECRET = os.environ.get('ABSOLUTE_SECRET', '')
+HOST = 'api.absolute.com'
 
 USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
                    'name':'Administrador','group_filter':None,'is_admin':True}}
@@ -18,53 +19,58 @@ def b64url(data):
         data = data.encode('utf-8')
     return base64.urlsafe_b64encode(data).decode('utf-8').rstrip('=')
 
-def make_jws(method, path, query, host, secret_mode):
-    issued_at = int(time.time() * 1000)
-    jose = {
-        "alg": "HS256",
-        "kid": TOKEN,
-        "method": method,
-        "content-type": "application/json",
-        "uri": path,
-        "query-string": query,
-        "issuedAt": issued_at
-    }
-    eh = b64url(jose)
-    ep = b64url({})
-    si = f"{eh}.{ep}"
-    key = SECRET.encode('utf-8') if secret_mode == 'string' else base64.b64decode(SECRET)
-    sig = hmac.new(key, si.encode('utf-8'), hashlib.sha256).digest()
-    return f"{eh}.{ep}.{b64url(sig)}", issued_at
+def validate(jws):
+    """Usa o endpoint /jws/validate para checar a assinatura"""
+    try:
+        r = requests.post(f'https://{HOST}/jws/validate', data=jws,
+                          headers={'Content-Type':'text/plain'}, timeout=10)
+        return r.status_code, r.text[:150]
+    except Exception as e:
+        return 'ERR', str(e)[:80]
 
 @app.get('/diag')
 def diag():
     out = {}
     path, q = '/v3/devices', '$top=3'
+    key = base64.b64decode(SECRET)  # sabemos que é base64
+    issued_at = int(time.time() * 1000)
 
-    # TESTE A: Validar JWS no endpoint dedicado (US e CADC)
-    for host in ['api.us.absolute.com', 'api.absolute.com']:
-        for sm in ['string', 'base64']:
-            jws, _ = make_jws('GET', path, q, host, sm)
-            try:
-                r = requests.post(f'https://{host}/jws/validate',
-                                  data=jws,
-                                  headers={'Content-Type': 'text/plain'},
-                                  timeout=10)
-                out[f'validate_{host}_{sm}'] = {'status': r.status_code, 'body': r.text[:200]}
-            except Exception as e:
-                out[f'validate_{host}_{sm}'] = {'error': str(e)[:100]}
+    jose = {"alg":"HS256","kid":TOKEN,"method":"GET","content-type":"application/json",
+            "uri":path,"query-string":q,"issuedAt":issued_at}
+    eh = b64url(jose)
 
-    # TESTE B: Chamar /v3/devices no host US
-    for host in ['api.us.absolute.com', 'api.absolute.com']:
-        for sm in ['string', 'base64']:
-            jws, _ = make_jws('GET', path, q, host, sm)
-            try:
-                r = requests.get(f'https://{host}{path}?{q}',
-                                 headers={'Authorization': jws, 'Content-Type': 'application/json'},
-                                 timeout=10)
-                out[f'devices_{host}_{sm}'] = {'status': r.status_code, 'body': r.text[:100]}
-            except Exception as e:
-                out[f'devices_{host}_{sm}'] = {'error': str(e)[:100]}
+    # Variação 1: payload {} (atual)
+    ep1 = b64url({})
+    si1 = f"{eh}.{ep1}"
+    sig1 = b64url(hmac.new(key, si1.encode(), hashlib.sha256).digest())
+    out['payload_empty_obj'] = dict(zip(['status','body'], validate(f"{si1}.{sig1}")))
+
+    # Variação 2: payload vazio (string vazia)
+    ep2 = b64url("")
+    si2 = f"{eh}.{ep2}"
+    sig2 = b64url(hmac.new(key, si2.encode(), hashlib.sha256).digest())
+    out['payload_empty_str'] = dict(zip(['status','body'], validate(f"{si2}.{sig2}")))
+
+    # Variação 3: sem payload (header..sig)
+    si3 = f"{eh}."
+    sig3 = b64url(hmac.new(key, si3.encode(), hashlib.sha256).digest())
+    out['payload_none'] = dict(zip(['status','body'], validate(f"{eh}..{sig3}")))
+
+    # Variação 4: assinar só o header (sem o ponto)
+    sig4 = b64url(hmac.new(key, eh.encode(), hashlib.sha256).digest())
+    out['sign_header_only'] = dict(zip(['status','body'], validate(f"{eh}.{ep1}.{sig4}")))
+
+    # Variação 5: secret string + base64 no signing (híbrido)
+    si5 = f"{eh}.{ep1}"
+    sig5 = b64url(hmac.new(SECRET.encode(), si5.encode(), hashlib.sha256).digest())
+    out['secret_string'] = dict(zip(['status','body'], validate(f"{si5}.{sig5}")))
+
+    # Variação 6: jose header SEM os campos extras (JWT padrão)
+    jose_min = {"alg":"HS256","kid":TOKEN}
+    eh6 = b64url(jose_min)
+    si6 = f"{eh6}.{ep1}"
+    sig6 = b64url(hmac.new(key, si6.encode(), hashlib.sha256).digest())
+    out['jose_minimal'] = dict(zip(['status','body'], validate(f"{si6}.{sig6}")))
 
     return jsonify(out)
 
