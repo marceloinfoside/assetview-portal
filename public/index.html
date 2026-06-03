@@ -183,10 +183,15 @@ function renderDevices(list){
   document.getElementById('stat-sync').textContent=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
   document.getElementById('last-update').textContent='Última atualização: '+new Date().toLocaleString('pt-BR');
   grid.innerHTML=list.map((d,i)=>{
-    const on_=isOnline(d),dp=diskPct(d),mp=memPct(d);
+    const on_=isOnline(d),mp=memPct(d);
     const model=[d.systemManufacturer,d.systemModel].filter(Boolean).join(' ')||'—';
-    const os=d.operatingSystem&&d.operatingSystem.name?d.operatingSystem.name:(d.platformOSType||'—');
-    const user=d.currentUsername||d.username||'—';
+    const osObj=d.operatingSystem||{};
+    const osName=osObj.name||d.platformOSType||'';
+    const osVer=osObj.version||osObj.releaseId||osObj.versionNumber||'';
+    const os=[osName,osVer].filter(Boolean).join(' ')||'—';
+    const user=d.username||'—';
+    const curUser=d.currentUsername||'';
+    const showCur=curUser && curUser!==d.username;
     return `<div class="device-card ${on_?'':'offline'}">
       <div class="device-header"><div>
         <div class="device-name">${fmt(d.deviceName||d.fullSystemName)}</div>
@@ -194,18 +199,23 @@ function renderDevices(list){
         <div class="status-badge ${on_?'online':'offline'}"><div class="status-dot"></div>${on_?'Ativo':'Inativo'}</div>
       </div><hr class="device-divider">
       <div class="device-info-grid">
+        <div class="info-item full"><div class="info-key">Nome completo</div><div class="info-val">${fmt(d.fullSystemName)}</div></div>
         <div class="info-item"><div class="info-key">Serial</div><div class="info-val">${fmt(d.serialNumber||d.esn)}</div></div>
         <div class="info-item"><div class="info-key">Usuário</div><div class="info-val">${user}</div></div>
-        <div class="info-item"><div class="info-key">Sistema</div><div class="info-val">${os}</div></div>
-        <div class="info-item"><div class="info-key">Último acesso</div><div class="info-val">${timeSince(d.lastConnectedDateTimeUtc)}</div></div>
+        ${showCur?`<div class="info-item"><div class="info-key">Usuário atual</div><div class="info-val">${curUser}</div></div>`:''}
+        <div class="info-item"><div class="info-key">Domínio</div><div class="info-val">${fmt(d.domain)}</div></div>
+        <div class="info-item full"><div class="info-key">Sistema</div><div class="info-val">${os}</div></div>
         ${currentUser&&currentUser.isAdmin&&d.policyGroupName?`<div class="info-item full"><div class="info-key">Grupo</div><div class="info-val">${d.policyGroupName}</div></div>`:''}
         ${d.localIpAddress?`<div class="info-item"><div class="info-key">IP Local</div><div class="info-val">${d.localIpAddress}</div></div>`:''}
         ${d.publicIpAddress?`<div class="info-item"><div class="info-key">IP Público</div><div class="info-val">${d.publicIpAddress}</div></div>`:''}
       </div>
-      ${(dp!==null||mp!==null)?`<hr class="device-divider"><div class="device-metrics">${metricBar('DSK',dp)}${metricBar('MEM',mp)}</div>`:''}
+      ${(mp!==null)?`<hr class="device-divider"><div class="device-metrics">${metricBar('MEM',mp)}${memText(d)}</div>`:''}
       ${geoHTML(d)}
     </div>`;}).join('');
 }
+function memText(d){const t=d.totalPhysicalRamBytes,a=d.availablePhysicalRamBytes;
+  if(!t||a==null)return'';const gb=b=>(b/1073741824).toFixed(1);
+  return `<div style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);padding-left:50px;">${gb(a)} GB livres de ${gb(t)} GB</div>`;}
 function applySearch(){const q=document.getElementById('search-box').value.toLowerCase();
   const f=q?allDevices.filter(d=>JSON.stringify(d).toLowerCase().includes(q)):allDevices;
   renderDevices(f);}
