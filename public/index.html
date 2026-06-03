@@ -205,9 +205,8 @@ function renderDevices(list){
         ${showCur?`<div class="info-item"><div class="info-key">Usuário atual</div><div class="info-val">${curUser}</div></div>`:''}
         <div class="info-item"><div class="info-key">Domínio</div><div class="info-val">${fmt(d.domain)}</div></div>
         <div class="info-item full"><div class="info-key">Sistema</div><div class="info-val">${os}</div></div>
-        ${currentUser&&currentUser.isAdmin&&d.policyGroupName?`<div class="info-item full"><div class="info-key">Grupo</div><div class="info-val">${d.policyGroupName}</div></div>`:''}
-        ${d.localIpAddress?`<div class="info-item"><div class="info-key">IP Local</div><div class="info-val">${d.localIpAddress}</div></div>`:''}
-        ${d.publicIpAddress?`<div class="info-item"><div class="info-key">IP Público</div><div class="info-val">${d.publicIpAddress}</div></div>`:''}
+        ${d.localIpAddress?`<div class="info-item"><div class="info-key">IP Local</div><div class="info-val">${fmtIp(d.localIpAddress)}</div></div>`:''}
+        ${d.publicIpAddress?`<div class="info-item"><div class="info-key">IP Público</div><div class="info-val">${fmtIp(d.publicIpAddress)}</div></div>`:''}
       </div>
       ${(mp!==null)?`<hr class="device-divider"><div class="device-metrics">${metricBar('MEM',mp)}${memText(d)}</div>`:''}
       ${geoHTML(d)}
@@ -216,6 +215,15 @@ function renderDevices(list){
 function memText(d){const t=d.totalPhysicalRamBytes,a=d.availablePhysicalRamBytes;
   if(!t||a==null)return'';const gb=b=>(b/1073741824).toFixed(1);
   return `<div style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);padding-left:50px;">${gb(a)} GB livres de ${gb(t)} GB</div>`;}
+function fmtIp(v){if(v==null)return'—';
+  if(Array.isArray(v))v=v[0];
+  v=String(v).trim();
+  if(v.includes(','))v=v.split(',')[0].trim();
+  if(v.includes(';'))v=v.split(';')[0].trim();
+  if(v.includes(':'))return v;
+  if(/^\d+$/.test(v)){const n=parseInt(v,10);
+    if(n>255){return [(n>>>24)&255,(n>>>16)&255,(n>>>8)&255,n&255].join('.');}}
+  return v||'—';}
 function applySearch(){const q=document.getElementById('search-box').value.toLowerCase();
   const f=q?allDevices.filter(d=>JSON.stringify(d).toLowerCase().includes(q)):allDevices;
   renderDevices(f);}
@@ -254,11 +262,6 @@ document.getElementById('btn-refresh').addEventListener('click',()=>loadDevices(
 document.getElementById('search-box').addEventListener('input',applySearch);
 document.getElementById('group-filter').addEventListener('change',e=>loadDevices(e.target.value));
 (async()=>{try{const r=await fetch('/api/me');if(r.ok){showApp(await r.json());}else showLogin();}catch{showLogin();}})();
-</script>
-</body>
-</html>
-
-})();
 </script>
 </body>
 </html>
