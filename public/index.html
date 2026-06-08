@@ -129,11 +129,9 @@
     </div>
   </div>
   <div class="main">
-    <div class="stats-row">
-      <div class="stat-card"><div class="stat-label">Total de Equipamentos</div><div class="stat-value" id="stat-total">—</div></div>
-      <div class="stat-card"><div class="stat-label">Ativos</div><div class="stat-value green" id="stat-online">—</div></div>
-      <div class="stat-card"><div class="stat-label">Inativos</div><div class="stat-value red" id="stat-offline">—</div></div>
-      <div class="stat-card"><div class="stat-label">Última Sync</div><div class="stat-value blue" id="stat-sync" style="font-size:18px;padding-top:6px">—</div></div>
+    <div class="stats-row" style="grid-template-columns:repeat(2,1fr);">
+      <div class="stat-card"><div class="stat-label">Total de Equipamentos Ativos</div><div class="stat-value green" id="stat-total">—</div></div>
+      <div class="stat-card"><div class="stat-label">Última Sincronização</div><div class="stat-value blue" id="stat-sync" style="font-size:18px;padding-top:6px">—</div></div>
     </div>
     <div class="toolbar">
       <div class="section-title">Equipamentos</div>
@@ -176,10 +174,7 @@ function geoHTML(d){const g=d.geoData;if(!g)return'';
 function renderDevices(list){
   const grid=document.getElementById('device-grid');
   if(!list.length){grid.innerHTML='<div class="empty-state">Nenhum equipamento encontrado.</div>';return;}
-  const on=list.filter(isOnline).length;
   document.getElementById('stat-total').textContent=list.length;
-  document.getElementById('stat-online').textContent=on;
-  document.getElementById('stat-offline').textContent=list.length-on;
   document.getElementById('stat-sync').textContent=new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
   document.getElementById('last-update').textContent='Última atualização: '+new Date().toLocaleString('pt-BR');
   grid.innerHTML=list.map((d,i)=>{
