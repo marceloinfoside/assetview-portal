@@ -39,7 +39,7 @@ def fetch_all_devices(group_filter=None):
     all_devices = []
     next_page = None
     for _ in range(20):  # máx 20 páginas (~2000 devices)
-        qs = f'select={quote(fields, safe="")}&pageSize=100'
+        qs = f'select={quote(fields, safe="")}&pageSize=100&agentStatus=A'
         if group_filter:
             qs += f'&policyGroupName={quote(group_filter, safe="")}'
         if next_page:
