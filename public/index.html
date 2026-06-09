@@ -52,12 +52,11 @@
 
   /* Tabela */
   .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
-  .thead { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 90px; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); background:var(--surface2); font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--muted); position:sticky; top:60px; z-index:50; }
+  .thead { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 90px; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); background:var(--surface2); font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--muted); }
   .th-sort { cursor:pointer; user-select:none; display:flex; align-items:center; gap:4px; }
   .th-sort:hover { color:var(--accent); }
   .th-arrow { font-size:9px; opacity:.5; }
   .th-arrow.active { opacity:1; color:var(--accent); }
-  .row-group { border-bottom:1px solid #eef0f4; }
   .row { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 90px; gap:12px; padding:14px 18px; align-items:center; cursor:pointer; transition:background .12s; }
   .row:hover { background:var(--surface2); }
   .row.open { background:var(--surface2); }
@@ -66,7 +65,8 @@
   .cell-name { font-size:14px; font-weight:600; color:var(--text); }
   .cell { font-size:13px; color:var(--muted); font-family:'DM Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .badge { font-size:11px; font-weight:600; text-transform:uppercase; padding:3px 9px; border-radius:20px; background:rgba(22,163,74,.12); color:var(--online); }
-  .details { padding:6px 18px 18px 62px; display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  .row-group { border-bottom:1px solid #eef0f4; display:block; width:100%; }
+  .details { padding:6px 18px 18px 62px; display:grid; grid-template-columns:repeat(3,1fr); gap:14px; width:100%; box-sizing:border-box; }
   .det-key { font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--muted); margin-bottom:3px; }
   .det-val { font-size:13px; font-family:'DM Mono',monospace; color:var(--text); word-break:break-all; }
   .metric-bar-bg { flex:1; height:5px; background:var(--border); border-radius:3px; overflow:hidden; }
@@ -172,17 +172,15 @@ function updateArrows(){
 }
 function render(){
   const box=document.getElementById('device-list');
-  sortDevices();
   if(!viewDevices.length){box.innerHTML='<div class="empty-state">Nenhum equipamento encontrado.</div>';return;}
-  box.innerHTML=viewDevices.map(d=>{
-    const id=devId(d);
-    const open=openSet.has(id);
+  box.innerHTML=viewDevices.map((d,idx)=>{
+    const open=openSet.has(idx);
     const model=[d.systemManufacturer,d.systemModel].filter(Boolean).join(' ')||'—';
     const curUser=d.currentUsername||'';
     const showCur=curUser && curUser!==d.username;
     const mp=memPct(d);
     return `<div class="row-group">
-      <div class="row ${open?'open':''}" data-id="${id}">
+      <div class="row ${open?'open':''}" data-idx="${idx}">
         <div class="toggle">${open?'−':'+'}</div>
         <div class="cell-name">${fmt(d.deviceName||d.fullSystemName)}</div>
         <div class="cell cell-modelo">${model}</div>
@@ -205,8 +203,8 @@ function render(){
   }).join('');
   box.querySelectorAll('.row').forEach(r=>{
     r.addEventListener('click',()=>{
-      const id=r.getAttribute('data-id');
-      if(openSet.has(id))openSet.delete(id);else openSet.add(id);
+      const idx=parseInt(r.getAttribute('data-idx'),10);
+      if(openSet.has(idx))openSet.delete(idx);else openSet.add(idx);
       render();
     });
   });
@@ -219,6 +217,10 @@ function updateStats(){
 function applySearch(){
   const q=document.getElementById('search-box').value.toLowerCase().trim();
   viewDevices=q?allDevices.filter(d=>JSON.stringify(d).toLowerCase().includes(q)):allDevices.slice();
+  sortDevices();
+  openSet.clear();
+  allExpanded=false;
+  document.getElementById('btn-expand').textContent='Expandir todos';
   updateStats();render();
 }
 async function loadDevices(group=''){
@@ -277,7 +279,7 @@ document.getElementById('group-filter').addEventListener('change',e=>loadDevices
 document.getElementById('btn-export').addEventListener('click',exportCSV);
 document.getElementById('btn-expand').addEventListener('click',()=>{
   allExpanded=!allExpanded;
-  if(allExpanded){viewDevices.forEach(d=>openSet.add(devId(d)));document.getElementById('btn-expand').textContent='Recolher todos';}
+  if(allExpanded){viewDevices.forEach((d,i)=>openSet.add(i));document.getElementById('btn-expand').textContent='Recolher todos';}
   else{openSet.clear();document.getElementById('btn-expand').textContent='Expandir todos';}
   render();
 });
@@ -285,6 +287,8 @@ document.querySelectorAll('.th-sort').forEach(th=>{
   th.addEventListener('click',()=>{
     const k=th.getAttribute('data-sort');
     if(sortKey===k)sortDir*=-1;else{sortKey=k;sortDir=1;}
+    sortDevices();openSet.clear();allExpanded=false;
+    document.getElementById('btn-expand').textContent='Expandir todos';
     updateArrows();render();
   });
 });
@@ -293,3 +297,4 @@ updateArrows();
 </script>
 </body>
 </html>
+
