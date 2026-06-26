@@ -154,6 +154,16 @@ function memPct(d){const t=d.totalPhysicalRamBytes,a=d.availablePhysicalRamBytes
   if(!t||a==null)return null;return Math.round(((t-a)/t)*100);}
 function gb(b){return(b/1073741824).toFixed(1);}
 function barClass(p){return p>=90?'crit':p>=70?'warn':'';}
+function lastSeen(v){if(!v)return'—';
+  const d=new Date(v);if(isNaN(d))return'—';
+  const dataHora=d.toLocaleString('pt-BR',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  const diff=(Date.now()-d.getTime())/1000;
+  let rel;
+  if(diff<60)rel='agora';
+  else if(diff<3600)rel='há '+Math.floor(diff/60)+' min';
+  else if(diff<86400)rel='há '+Math.floor(diff/3600)+' h';
+  else rel='há '+Math.floor(diff/86400)+' dias';
+  return dataHora+' ('+rel+')';}
 function devId(d){return d.deviceUid||d.esn||d.serialNumber||d.deviceName;}
 
 function sortDevices(){
@@ -195,6 +205,7 @@ function render(){
         <div><div class="det-key">Sistema</div><div class="det-val">${osStr(d)}</div></div>
         <div><div class="det-key">IP Local</div><div class="det-val">${fmtIp(d.localIpAddress)}</div></div>
         <div><div class="det-key">IP Público</div><div class="det-val">${fmtIp(d.publicIpAddress)}</div></div>
+        <div><div class="det-key">Última conexão</div><div class="det-val">${lastSeen(d.lastConnectedDateTimeUtc)}</div></div>
         ${mp!==null?`<div><div class="det-key">Memória</div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:4px;"><div class="metric-bar-bg"><div class="metric-bar-fill ${barClass(mp)}" style="width:${mp}%"></div></div><span style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);">${mp}%</span></div>
           <div style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);margin-top:3px;">${gb(d.availablePhysicalRamBytes)} GB de ${gb(d.totalPhysicalRamBytes)} GB</div></div>`:''}
@@ -243,11 +254,12 @@ async function loadDevices(group=''){
   }catch(e){box.innerHTML='<div class="empty-state">Erro de conexão: '+e.message+'</div>';}
 }
 function exportCSV(){
-  const cols=[['Equipamento','deviceName'],['Nome completo','fullSystemName'],['Modelo',null],['Serial','serialNumber'],['Usuário','username'],['Usuário atual','currentUsername'],['Domínio','domain'],['Sistema',null],['IP Local','localIpAddress'],['IP Público','publicIpAddress'],['Status','agentStatus']];
+  const cols=[['Equipamento','deviceName'],['Nome completo','fullSystemName'],['Modelo',null],['Serial','serialNumber'],['Usuário','username'],['Usuário atual','currentUsername'],['Domínio','domain'],['Sistema',null],['IP Local','localIpAddress'],['IP Público','publicIpAddress'],['Última conexão','__lastseen__'],['Status','agentStatus']];
   const head=cols.map(c=>c[0]).join(';');
   const rows=viewDevices.map(d=>cols.map(c=>{
     let v;
     if(c[1]==='localIpAddress'||c[1]==='publicIpAddress')v=fmtIp(d[c[1]]);
+    else if(c[1]==='__lastseen__')v=lastSeen(d.lastConnectedDateTimeUtc);
     else if(c[0]==='Modelo')v=[d.systemManufacturer,d.systemModel].filter(Boolean).join(' ');
     else if(c[0]==='Sistema')v=osStr(d);
     else if(c[1]==='agentStatus')v='Ativo';
@@ -297,4 +309,3 @@ updateArrows();
 </script>
 </body>
 </html>
-
