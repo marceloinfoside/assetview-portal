@@ -320,11 +320,12 @@ async function doLogin(){
   const username=document.getElementById('inp-user').value.trim();
   const password=document.getElementById('inp-pass').value;
   const err=document.getElementById('login-error');err.style.display='none';
-  const btn=document.getElementById('btn-login');btn.textContent='Enviando...';btn.disabled=true;
+  const btn=document.getElementById('btn-login');btn.textContent='Entrando...';btn.disabled=true;
   try{
     const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
     const data=await r.json();
     if(!r.ok){err.textContent=data.error||'Falha no login.';err.style.display='block';return;}
+    if(data.step==='done'){showApp(data);return;}
     pendingUser=username;show2FA(data.email_hint||'seu e-mail');
   }catch(e){err.textContent='Erro de conexão.';err.style.display='block';}
   finally{btn.textContent='Entrar';btn.disabled=false;}
@@ -379,3 +380,4 @@ updateArrows();
 </script>
 </body>
 </html>
+
