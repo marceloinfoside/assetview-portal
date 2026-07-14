@@ -132,8 +132,65 @@ def absolute_request(method, uri, query_string='', payload=None):
     r = requests.post(VALIDATE_URL, data=jws, headers={'Content-Type':'text/plain'}, timeout=30)
     return r
 
+# ==== DEVICE GROUPS (Device Group Tree API) ====
+# Cache simples: {nome_lower: {'uid':..., 'ts':...}} e {uid: {'uids':set, 'ts':...}}
+_DG_NODES_CACHE = {'data': None, 'ts': 0}
+_DG_DEVICES_CACHE = {}
+_DG_TTL = 300  # 5 min
+
+def fetch_device_group_uid(group_name):
+    """Busca o deviceGroupTreeUid pelo nome (displayName) do grupo."""
+    now = time.time()
+    if not _DG_NODES_CACHE['data'] or now - _DG_NODES_CACHE['ts'] > _DG_TTL:
+        nodes = []
+        next_page = None
+        for _ in range(10):
+            qs = 'pageSize=100'
+            if next_page:
+                qs += f'&nextPage={quote(next_page, safe="")}'
+            r = absolute_request('GET', '/v3/configurations/devicegrouptree/nodes', qs)
+            if not r.ok:
+                return None, f'DeviceGroups API {r.status_code}: {r.text[:150]}'
+            body = r.json()
+            nodes.extend(body.get('data', []))
+            next_page = body.get('metadata', {}).get('pagination', {}).get('nextPage')
+            if not next_page: break
+        _DG_NODES_CACHE['data'] = nodes
+        _DG_NODES_CACHE['ts'] = now
+    gf = group_name.strip().lower()
+    for n in _DG_NODES_CACHE['data']:
+        name = (n.get('displayName') or n.get('name') or '').strip().lower()
+        if name == gf:
+            uid = n.get('deviceGroupTreeUid') or n.get('uid') or n.get('id')
+            return uid, None
+    return None, f'Grupo "{group_name}" não encontrado nos Device Groups.'
+
+def fetch_device_group_device_uids(group_uid):
+    """Busca o conjunto de deviceUids de um device group."""
+    now = time.time()
+    cached = _DG_DEVICES_CACHE.get(group_uid)
+    if cached and now - cached['ts'] < _DG_TTL:
+        return cached['uids'], None
+    uids = set()
+    next_page = None
+    for _ in range(30):
+        qs = 'pageSize=500'
+        if next_page:
+            qs += f'&nextPage={quote(next_page, safe="")}'
+        r = absolute_request('GET', f'/v3/configurations/devicegrouptree/nodes/{group_uid}/get-devices', qs)
+        if not r.ok:
+            return None, f'GroupDevices API {r.status_code}: {r.text[:150]}'
+        body = r.json()
+        for d in body.get('data', []):
+            u = d.get('deviceUid') or d.get('uid') or d.get('id')
+            if u: uids.add(u)
+        next_page = body.get('metadata', {}).get('pagination', {}).get('nextPage')
+        if not next_page: break
+    _DG_DEVICES_CACHE[group_uid] = {'uids': uids, 'ts': now}
+    return uids, None
+
 def fetch_all_devices(group_filter=None):
-    fields = ('esn,deviceName,fullSystemName,systemManufacturer,systemModel,serialNumber,'
+    fields = ('deviceUid,esn,deviceName,fullSystemName,systemManufacturer,systemModel,serialNumber,'
               'systemType,agentStatus,platformOSType,operatingSystem,username,currentUsername,'
               'lastConnectedDateTimeUtc,geoData,localIpAddress,publicIpAddress,'
               'totalPhysicalRamBytes,availablePhysicalRamBytes,volumes,cpu,policyGroupName,domain')
@@ -152,11 +209,22 @@ def fetch_all_devices(group_filter=None):
         all_devices.extend(page)
         next_page = body.get('metadata', {}).get('pagination', {}).get('nextPage')
         if not next_page or not page: break
-    # Filtro de grupo feito no código (robusto): compara ignorando maiúsc/espaços
     if group_filter:
-        gf = group_filter.strip().lower()
-        all_devices = [d for d in all_devices
-                       if (d.get('policyGroupName') or '').strip().lower() == gf]
+        # 1) Tenta como Device Group (estrutura oficial de grupos de dispositivos)
+        uid, err = fetch_device_group_uid(group_filter)
+        if uid:
+            guids, err2 = fetch_device_group_device_uids(uid)
+            if err2:
+                return None, err2
+            all_devices = [d for d in all_devices if d.get('deviceUid') in guids]
+        else:
+            # 2) Fallback: tenta como Policy Group (compatibilidade)
+            gf = group_filter.strip().lower()
+            filtered = [d for d in all_devices
+                        if (d.get('policyGroupName') or '').strip().lower() == gf]
+            if not filtered:
+                return None, err or f'Grupo "{group_filter}" não encontrado.'
+            all_devices = filtered
     return all_devices, None
 
 @app.get('/diag-dg')
@@ -329,17 +397,28 @@ def groups():
     if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
     if not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador'}), 403
-    devs, err = fetch_all_devices(None)
-    if err:
-        return jsonify({'error': err}), 500
-    counts = {}
-    for d in devs:
-        g = d.get('policyGroupName') or '(sem grupo)'
-        counts[g] = counts.get(g, 0) + 1
-    ordered = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
-    return jsonify({'total_grupos': len(ordered),
-                    'total_equipamentos': len(devs),
-                    'grupos': [{'nome': g, 'equipamentos': c} for g, c in ordered]})
+    # Lista os Device Groups (nomes) a partir da árvore
+    now = time.time()
+    if not _DG_NODES_CACHE['data'] or now - _DG_NODES_CACHE['ts'] > _DG_TTL:
+        # força atualização via função auxiliar
+        fetch_device_group_uid('__forcar_carga__')
+    nodes = _DG_NODES_CACHE.get('data') or []
+    grupos = []
+    for n in nodes:
+        nome = n.get('displayName') or n.get('name') or '(sem nome)'
+        tipo = n.get('nodeType') or ''
+        grupos.append({'nome': nome, 'tipo': tipo,
+                       'uid': n.get('deviceGroupTreeUid') or n.get('uid') or n.get('id')})
+    grupos.sort(key=lambda x: x['nome'].lower())
+    return jsonify({'total_grupos': len(grupos), 'grupos': grupos})
+
+@app.get('/diag-dg2')
+def diag_dg2():
+    if 'user' not in session or not session['user'].get('isAdmin'):
+        return jsonify({'error':'Apenas administrador logado'}), 403
+    r = absolute_request('GET', '/v3/configurations/devicegrouptree/nodes', 'pageSize=100')
+    out = {'nodes_status': r.status_code, 'nodes_body': r.text[:800]}
+    return jsonify(out)
 
 @app.get('/', defaults={'path':''})
 @app.get('/<path:path>')
