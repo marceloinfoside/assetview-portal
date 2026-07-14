@@ -50,6 +50,8 @@ except Exception as e:
 PENDING = {}
 CODE_TTL = 300  # 5 minutos
 MAX_TRIES = 5
+# 2FA desligado por padrão. Para ligar, defina ENABLE_2FA=true no Railway (requer Resend configurado).
+ENABLE_2FA = os.environ.get('ENABLE_2FA', 'false').lower() in ('1', 'true', 'yes', 'sim')
 
 def b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip('=')
@@ -197,6 +199,11 @@ def login():
     u = USERS.get(username)
     if not u or u['password'] != d.get('password',''):
         return jsonify({'error':'Usuário ou senha inválidos'}), 401
+    # 2FA desligado: cria sessão direto
+    if not ENABLE_2FA:
+        session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group']}
+        return jsonify({'success':True, 'step':'done', 'name':u['name'], 'isAdmin':u['is_admin']})
+    # 2FA ligado: envia código
     if not u.get('email'):
         return jsonify({'error':'Usuário sem e-mail cadastrado. Contate o administrador.'}), 400
     code = f'{random.randint(0, 999999):06d}'
