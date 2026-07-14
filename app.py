@@ -165,8 +165,17 @@ def fetch_device_group_uid(group_name):
             return uid, None
     return None, f'Grupo "{group_name}" não encontrado nos Device Groups.'
 
-def fetch_device_group_device_uids(group_uid):
-    """Busca o conjunto de deviceUids de um device group."""
+def _child_uids(parent_uid):
+    """Retorna os uids dos nós filhos de um nó (para pastas com subgrupos)."""
+    children = []
+    for n in (_DG_NODES_CACHE.get('data') or []):
+        pr = n.get('parentRelation') or {}
+        if pr.get('parentNodeId') == parent_uid:
+            children.append(n.get('deviceGroupTreeUid'))
+    return children
+
+def fetch_device_group_device_uids(group_uid, _depth=0):
+    """Busca o conjunto de deviceUids de um grupo, incluindo filhos (recursivo)."""
     now = time.time()
     cached = _DG_DEVICES_CACHE.get(group_uid)
     if cached and now - cached['ts'] < _DG_TTL:
@@ -179,14 +188,24 @@ def fetch_device_group_device_uids(group_uid):
             qs += f'&nextPage={quote(next_page, safe="")}'
         r = absolute_request('GET', f'/v3/configurations/devicegrouptree/nodes/{group_uid}/get-devices', qs)
         if not r.ok:
-            return None, f'GroupDevices API {r.status_code}: {r.text[:150]}'
+            if _depth == 0:
+                return None, f'GroupDevices API {r.status_code}: {r.text[:150]}'
+            break  # em filhos, ignora erro
         body = r.json()
         for d in body.get('data', []):
             u = d.get('deviceUid') or d.get('uid') or d.get('id')
             if u: uids.add(u)
         next_page = body.get('metadata', {}).get('pagination', {}).get('nextPage')
         if not next_page: break
-    _DG_DEVICES_CACHE[group_uid] = {'uids': uids, 'ts': now}
+    # se for pasta com filhos, agrega os dispositivos dos filhos também
+    if _depth < 3:
+        for cu in _child_uids(group_uid):
+            if cu:
+                child_uids, _ = fetch_device_group_device_uids(cu, _depth+1)
+                if child_uids:
+                    uids |= child_uids
+    if _depth == 0:
+        _DG_DEVICES_CACHE[group_uid] = {'uids': uids, 'ts': now}
     return uids, None
 
 def fetch_all_devices(group_filter=None):
@@ -417,7 +436,33 @@ def diag_dg2():
     if 'user' not in session or not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador logado'}), 403
     r = absolute_request('GET', '/v3/configurations/devicegrouptree/nodes', 'pageSize=100')
-    out = {'nodes_status': r.status_code, 'nodes_body': r.text[:800]}
+    out = {'nodes_status': r.status_code}
+    try:
+        nodes = r.json().get('data', [])
+        resumo = []
+        for n in nodes:
+            uid = n.get('deviceGroupTreeUid')
+            nome = n.get('displayName')
+            tipo = n.get('nodeType')
+            gtype = (n.get('deviceGroup') or {}).get('groupType', '')
+            # conta dispositivos do grupo
+            cnt = '?'
+            try:
+                rd = absolute_request('GET', f'/v3/configurations/devicegrouptree/nodes/{uid}/get-devices', 'pageSize=10')
+                if rd.ok:
+                    cnt = len(rd.json().get('data', []))
+                    # se tem exatamente 10, pode ter mais (é só amostra)
+                    cnt = f'{cnt}+ (amostra)' if cnt == 10 else cnt
+                else:
+                    cnt = f'err {rd.status_code}'
+            except Exception as e:
+                cnt = f'exc {str(e)[:30]}'
+            resumo.append({'nome': nome, 'tipo': tipo, 'groupType': gtype,
+                           'uid': uid, 'dispositivos_amostra': cnt})
+        out['grupos'] = resumo
+    except Exception as e:
+        out['erro'] = str(e)[:200]
+        out['body'] = r.text[:500]
     return jsonify(out)
 
 @app.get('/', defaults={'path':''})
