@@ -131,6 +131,40 @@ def diag():
     r = absolute_request('GET', '/v3/reporting/devices', 'pageSize=2')
     return jsonify({'status': r.status_code, 'body': r.text[:400]})
 
+@app.get('/diag-email')
+def diag_email():
+    info = {
+        'SMTP_HOST': SMTP_HOST,
+        'SMTP_PORT': SMTP_PORT,
+        'SMTP_USER_preenchido': bool(SMTP_USER),
+        'SMTP_USER_valor': SMTP_USER if SMTP_USER else '(vazio)',
+        'SMTP_PASS_preenchido': bool(SMTP_PASS),
+        'SMTP_PASS_tamanho': len(SMTP_PASS) if SMTP_PASS else 0,
+        'SMTP_FROM': SMTP_FROM,
+        'ADMIN_EMAIL': os.environ.get('ADMIN_EMAIL', '(vazio)'),
+    }
+    dest = request.args.get('to') or os.environ.get('ADMIN_EMAIL', '')
+    if not dest:
+        info['resultado'] = 'Sem destinatário. Use /diag-email?to=seu@email.com'
+        return jsonify(info)
+    try:
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.set_debuglevel(0)
+            server.starttls(context=ctx)
+            server.login(SMTP_USER, SMTP_PASS)
+            msg = MIMEText('Teste de envio do Portal Infoside HaaS. Se você recebeu, está funcionando!')
+            msg['Subject'] = 'Teste SMTP - Infoside HaaS'
+            msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM}>'
+            msg['To'] = dest
+            server.sendmail(SMTP_FROM, [dest], msg.as_string())
+        info['resultado'] = f'SUCESSO - e-mail enviado para {dest}'
+    except Exception as e:
+        info['resultado'] = 'ERRO'
+        info['erro_tipo'] = type(e).__name__
+        info['erro_detalhe'] = str(e)[:300]
+    return jsonify(info)
+
 # ==== ETAPA 1: valida usuário/senha, envia código ====
 @app.post('/api/login')
 def login():
@@ -205,6 +239,23 @@ def devices():
         return jsonify({'error': err}), 500
     return jsonify({'devices': devs})
 
+@app.get('/api/groups')
+def groups():
+    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    if not session['user'].get('isAdmin'):
+        return jsonify({'error':'Apenas administrador'}), 403
+    devs, err = fetch_all_devices(None)
+    if err:
+        return jsonify({'error': err}), 500
+    counts = {}
+    for d in devs:
+        g = d.get('policyGroupName') or '(sem grupo)'
+        counts[g] = counts.get(g, 0) + 1
+    ordered = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+    return jsonify({'total_grupos': len(ordered),
+                    'total_equipamentos': len(devs),
+                    'grupos': [{'nome': g, 'equipamentos': c} for g, c in ordered]})
+
 @app.get('/', defaults={'path':''})
 @app.get('/<path:path>')
 def serve(path):
@@ -212,3 +263,4 @@ def serve(path):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT',3000)))
+
