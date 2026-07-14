@@ -1,4 +1,6 @@
-import time, os, json, base64, hmac, hashlib
+import time, os, json, base64, hmac, hashlib, random, smtplib, ssl
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import requests
 from urllib.parse import quote
 from flask import Flask, request, jsonify, session, send_from_directory
@@ -11,11 +13,81 @@ SECRET = os.environ.get('ABSOLUTE_SECRET', '')
 HOST = os.environ.get('ABSOLUTE_HOST', 'api.absolute.com')
 VALIDATE_URL = f'https://{HOST}/jws/validate'
 
-USERS = {'admin': {'password': os.environ.get('ADMIN_PASSWORD','admin123'),
-                   'name':'Administrador','group_filter':None,'is_admin':True}}
+# Config SMTP (Gmail)
+SMTP_HOST = os.environ.get('SMTP_HOST', 'smtp.gmail.com')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', '587'))
+SMTP_USER = os.environ.get('SMTP_USER', '')       # seu.email@gmail.com
+SMTP_PASS = os.environ.get('SMTP_PASS', '')       # senha de app (16 caracteres)
+SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USER)
+SMTP_FROM_NAME = os.environ.get('SMTP_FROM_NAME', 'Infoside HaaS')
+
+# ==== USUÁRIOS ====
+# Admin vem de variáveis próprias; clientes vêm de USERS_JSON.
+# USERS_JSON exemplo (uma linha na variável de ambiente):
+# {"randon":{"password":"senha123","name":"Randoncorp","email":"ti@randon.com","group":"Randoncorp"}}
+USERS = {}
+_admin_user = os.environ.get('ADMIN_USER', 'admin')
+USERS[_admin_user] = {
+    'password': os.environ.get('ADMIN_PASSWORD', 'admin123'),
+    'name': os.environ.get('ADMIN_NAME', 'Administrador'),
+    'email': os.environ.get('ADMIN_EMAIL', ''),
+    'group': None, 'is_admin': True
+}
+try:
+    _extra = json.loads(os.environ.get('USERS_JSON', '{}'))
+    for uname, info in _extra.items():
+        USERS[uname] = {
+            'password': info.get('password', ''),
+            'name': info.get('name', uname),
+            'email': info.get('email', ''),
+            'group': info.get('group'),
+            'is_admin': bool(info.get('is_admin', False))
+        }
+except Exception as e:
+    print('[USERS_JSON] erro ao ler:', e)
+
+# Códigos 2FA temporários em memória: {username: {'code':..,'exp':..,'tries':..}}
+PENDING = {}
+CODE_TTL = 300  # 5 minutos
+MAX_TRIES = 5
 
 def b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip('=')
+
+def send_2fa_email(to_email, code, user_name):
+    if not SMTP_USER or not SMTP_PASS:
+        print('[2FA] SMTP não configurado; código:', code)
+        return False, 'E-mail não configurado no servidor.'
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = f'Seu código de acesso: {code}'
+    msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM}>'
+    msg['To'] = to_email
+    html = f"""<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;">
+      <h2 style="color:#2563eb;margin-bottom:4px;">Infoside HaaS</h2>
+      <p style="color:#333;">Olá, {user_name}.</p>
+      <p style="color:#333;">Seu código de acesso é:</p>
+      <div style="font-size:32px;font-weight:bold;letter-spacing:6px;color:#0a0c10;
+        background:#f1f3f6;padding:16px;text-align:center;border-radius:8px;margin:16px 0;">{code}</div>
+      <p style="color:#666;font-size:13px;">Este código expira em 5 minutos. Se você não tentou acessar o portal, ignore este e-mail.</p>
+    </div>"""
+    msg.attach(MIMEText(html, 'html'))
+    try:
+        ctx = ssl.create_default_context()
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
+            server.starttls(context=ctx)
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+        return True, None
+    except Exception as e:
+        print('[2FA] erro envio:', e)
+        return False, 'Falha ao enviar o e-mail.'
+
+def mask_email(e):
+    if not e or '@' not in e: return '—'
+    n, d = e.split('@', 1)
+    if len(n) <= 2: nm = n[0] + '*'
+    else: nm = n[0] + '*'*(len(n)-2) + n[-1]
+    return nm + '@' + d
 
 def absolute_request(method, uri, query_string='', payload=None):
     issued_at = int(time.time() * 1000)
@@ -31,14 +103,13 @@ def absolute_request(method, uri, query_string='', payload=None):
     return r
 
 def fetch_all_devices(group_filter=None):
-    """Busca todos os dispositivos com paginação"""
     fields = ('esn,deviceName,fullSystemName,systemManufacturer,systemModel,serialNumber,'
               'systemType,agentStatus,platformOSType,operatingSystem,username,currentUsername,'
               'lastConnectedDateTimeUtc,geoData,localIpAddress,publicIpAddress,'
               'totalPhysicalRamBytes,availablePhysicalRamBytes,volumes,cpu,policyGroupName,domain')
     all_devices = []
     next_page = None
-    for _ in range(20):  # máx 20 páginas (~2000 devices)
+    for _ in range(20):
         qs = f'select={quote(fields, safe="")}&pageSize=100&agentStatus=A'
         if group_filter:
             qs += f'&policyGroupName={quote(group_filter, safe="")}'
@@ -46,15 +117,13 @@ def fetch_all_devices(group_filter=None):
             qs += f'&nextPage={quote(next_page, safe="")}'
         r = absolute_request('GET', '/v3/reporting/devices', qs)
         if not r.ok:
-            if all_devices:
-                break
+            if all_devices: break
             return None, f'API {r.status_code}: {r.text[:200]}'
         body = r.json()
         page = body.get('data', [])
         all_devices.extend(page)
         next_page = body.get('metadata', {}).get('pagination', {}).get('nextPage')
-        if not next_page or not page:
-            break
+        if not next_page or not page: break
     return all_devices, None
 
 @app.get('/diag')
@@ -62,14 +131,60 @@ def diag():
     r = absolute_request('GET', '/v3/reporting/devices', 'pageSize=2')
     return jsonify({'status': r.status_code, 'body': r.text[:400]})
 
+# ==== ETAPA 1: valida usuário/senha, envia código ====
 @app.post('/api/login')
 def login():
     d = request.get_json()
-    u = USERS.get(d.get('username','').strip())
+    username = d.get('username','').strip()
+    u = USERS.get(username)
     if not u or u['password'] != d.get('password',''):
         return jsonify({'error':'Usuário ou senha inválidos'}), 401
-    session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group_filter']}
-    return jsonify({'success':True,'name':u['name'],'isAdmin':u['is_admin']})
+    if not u.get('email'):
+        return jsonify({'error':'Usuário sem e-mail cadastrado. Contate o administrador.'}), 400
+    code = f'{random.randint(0, 999999):06d}'
+    PENDING[username] = {'code':code, 'exp':time.time()+CODE_TTL, 'tries':0}
+    ok, err = send_2fa_email(u['email'], code, u['name'])
+    if not ok:
+        return jsonify({'error':err or 'Falha ao enviar código.'}), 500
+    return jsonify({'success':True, 'step':'2fa', 'email_hint':mask_email(u['email'])})
+
+# ==== ETAPA 2: valida código, cria sessão ====
+@app.post('/api/verify')
+def verify():
+    d = request.get_json()
+    username = d.get('username','').strip()
+    code = d.get('code','').strip()
+    u = USERS.get(username)
+    p = PENDING.get(username)
+    if not u or not p:
+        return jsonify({'error':'Sessão expirada. Faça login novamente.'}), 400
+    if time.time() > p['exp']:
+        PENDING.pop(username, None)
+        return jsonify({'error':'Código expirado. Faça login novamente.'}), 400
+    p['tries'] += 1
+    if p['tries'] > MAX_TRIES:
+        PENDING.pop(username, None)
+        return jsonify({'error':'Muitas tentativas. Faça login novamente.'}), 429
+    if code != p['code']:
+        return jsonify({'error':'Código incorreto.'}), 401
+    PENDING.pop(username, None)
+    session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group']}
+    return jsonify({'success':True, 'name':u['name'], 'isAdmin':u['is_admin']})
+
+# ==== Reenviar código ====
+@app.post('/api/resend')
+def resend():
+    d = request.get_json()
+    username = d.get('username','').strip()
+    u = USERS.get(username)
+    if not u or not u.get('email'):
+        return jsonify({'error':'Faça login novamente.'}), 400
+    code = f'{random.randint(0, 999999):06d}'
+    PENDING[username] = {'code':code, 'exp':time.time()+CODE_TTL, 'tries':0}
+    ok, err = send_2fa_email(u['email'], code, u['name'])
+    if not ok:
+        return jsonify({'error':err or 'Falha ao reenviar.'}), 500
+    return jsonify({'success':True, 'email_hint':mask_email(u['email'])})
 
 @app.post('/api/logout')
 def logout():
