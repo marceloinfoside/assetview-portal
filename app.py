@@ -54,15 +54,8 @@ MAX_TRIES = 5
 def b64url(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).decode().rstrip('=')
 
-def send_2fa_email(to_email, code, user_name):
-    if not SMTP_USER or not SMTP_PASS:
-        print('[2FA] SMTP não configurado; código:', code)
-        return False, 'E-mail não configurado no servidor.'
-    msg = MIMEMultipart('alternative')
-    msg['Subject'] = f'Seu código de acesso: {code}'
-    msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM}>'
-    msg['To'] = to_email
-    html = f"""<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;">
+def _build_html(code, user_name):
+    return f"""<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;">
       <h2 style="color:#2563eb;margin-bottom:4px;">Infoside HaaS</h2>
       <p style="color:#333;">Olá, {user_name}.</p>
       <p style="color:#333;">Seu código de acesso é:</p>
@@ -70,14 +63,49 @@ def send_2fa_email(to_email, code, user_name):
         background:#f1f3f6;padding:16px;text-align:center;border-radius:8px;margin:16px 0;">{code}</div>
       <p style="color:#666;font-size:13px;">Este código expira em 5 minutos. Se você não tentou acessar o portal, ignore este e-mail.</p>
     </div>"""
-    msg.attach(MIMEText(html, 'html'))
+
+RESEND_KEY = os.environ.get('RESEND_API_KEY', '')
+
+def send_via_resend(to_email, code, user_name):
     try:
-        ctx = ssl.create_default_context()
+        r = requests.post('https://api.resend.com/emails',
+            headers={'Authorization': f'Bearer {RESEND_KEY}', 'Content-Type': 'application/json'},
+            json={'from': f'{SMTP_FROM_NAME} <{SMTP_FROM}>', 'to': [to_email],
+                  'subject': f'Seu código de acesso: {code}', 'html': _build_html(code, user_name)},
+            timeout=20)
+        if r.status_code in (200, 201):
+            return True, None
+        return False, f'Resend {r.status_code}: {r.text[:150]}'
+    except Exception as e:
+        return False, f'Resend erro: {str(e)[:150]}'
+
+def send_via_smtp(to_email, code, user_name):
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = f'Seu código de acesso: {code}'
+    msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM}>'
+    msg['To'] = to_email
+    msg.attach(MIMEText(_build_html(code, user_name), 'html'))
+    ctx = ssl.create_default_context()
+    if SMTP_PORT == 465:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20, context=ctx) as server:
+            server.login(SMTP_USER, SMTP_PASS)
+            server.sendmail(SMTP_FROM, [to_email], msg.as_string())
+    else:
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
             server.starttls(context=ctx)
             server.login(SMTP_USER, SMTP_PASS)
             server.sendmail(SMTP_FROM, [to_email], msg.as_string())
-        return True, None
+    return True, None
+
+def send_2fa_email(to_email, code, user_name):
+    # Prioridade: Resend (API, imune a bloqueio de porta) se configurado; senão SMTP
+    if RESEND_KEY:
+        return send_via_resend(to_email, code, user_name)
+    if not SMTP_USER or not SMTP_PASS:
+        print('[2FA] Nenhum método de e-mail configurado; código:', code)
+        return False, 'E-mail não configurado no servidor.'
+    try:
+        return send_via_smtp(to_email, code, user_name)
     except Exception as e:
         print('[2FA] erro envio:', e)
         return False, 'Falha ao enviar o e-mail.'
@@ -144,21 +172,17 @@ def diag_email():
         'ADMIN_EMAIL': os.environ.get('ADMIN_EMAIL', '(vazio)'),
     }
     dest = request.args.get('to') or os.environ.get('ADMIN_EMAIL', '')
+    info['metodo'] = 'Resend API' if RESEND_KEY else f'SMTP porta {SMTP_PORT}'
     if not dest:
         info['resultado'] = 'Sem destinatário. Use /diag-email?to=seu@email.com'
         return jsonify(info)
     try:
-        ctx = ssl.create_default_context()
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            server.set_debuglevel(0)
-            server.starttls(context=ctx)
-            server.login(SMTP_USER, SMTP_PASS)
-            msg = MIMEText('Teste de envio do Portal Infoside HaaS. Se você recebeu, está funcionando!')
-            msg['Subject'] = 'Teste SMTP - Infoside HaaS'
-            msg['From'] = f'{SMTP_FROM_NAME} <{SMTP_FROM}>'
-            msg['To'] = dest
-            server.sendmail(SMTP_FROM, [dest], msg.as_string())
-        info['resultado'] = f'SUCESSO - e-mail enviado para {dest}'
+        ok, err = send_2fa_email(dest, '123456', 'Teste')
+        if ok:
+            info['resultado'] = f'SUCESSO - e-mail enviado para {dest}'
+        else:
+            info['resultado'] = 'ERRO'
+            info['erro_detalhe'] = err
     except Exception as e:
         info['resultado'] = 'ERRO'
         info['erro_tipo'] = type(e).__name__
@@ -263,4 +287,3 @@ def serve(path):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT',3000)))
-
