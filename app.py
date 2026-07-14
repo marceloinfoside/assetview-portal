@@ -159,6 +159,41 @@ def fetch_all_devices(group_filter=None):
                        if (d.get('policyGroupName') or '').strip().lower() == gf]
     return all_devices, None
 
+@app.get('/diag-dg')
+def diag_dg():
+    if 'user' not in session or not session['user'].get('isAdmin'):
+        return jsonify({'error':'Apenas administrador logado'}), 403
+    out = {}
+    candidatos = [
+        '/v3/device-groups',
+        '/v3/device-group-tree',
+        '/v3/configurations/device-groups',
+        '/v3/device-groups-tree',
+        '/v3/reporting/device-groups',
+    ]
+    for ep in candidatos:
+        try:
+            r = absolute_request('GET', ep, '')
+            out[ep] = {'status': r.status_code, 'body': r.text[:300]}
+        except Exception as e:
+            out[ep] = {'erro': str(e)[:100]}
+    return jsonify(out)
+
+@app.get('/diag-dominios')
+def diag_dominios():
+    if 'user' not in session or not session['user'].get('isAdmin'):
+        return jsonify({'error':'Apenas administrador logado'}), 403
+    devs, err = fetch_all_devices(None)
+    if err:
+        return jsonify({'error': err}), 500
+    doms = {}
+    for d in devs:
+        dm = d.get('domain')
+        key = repr(dm)
+        doms[key] = doms.get(key, 0) + 1
+    ordered = dict(sorted(doms.items(), key=lambda x: -x[1]))
+    return jsonify({'total_equipamentos': len(devs), 'dominios': ordered})
+
 @app.get('/diag-grupos')
 def diag_grupos():
     if 'user' not in session or not session['user'].get('isAdmin'):
