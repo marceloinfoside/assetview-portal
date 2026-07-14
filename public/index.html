@@ -99,6 +99,20 @@
     <div class="login-error" id="login-error">Usuário ou senha inválidos.</div>
   </div>
 </div>
+<div id="twofa-screen" style="min-height:100vh;display:none;align-items:center;justify-content:center;">
+  <div class="login-box">
+    <div class="login-logo"><span></span> Verificação</div>
+    <div class="login-sub" id="twofa-hint">Enviamos um código para o seu e-mail.</div>
+    <div class="field-label">Código de 6 dígitos</div>
+    <input class="field-input" type="text" id="inp-code" inputmode="numeric" maxlength="6" placeholder="000000" style="letter-spacing:8px;text-align:center;font-size:20px;">
+    <button class="btn-login" id="btn-verify">Confirmar</button>
+    <div class="login-error" id="twofa-error"></div>
+    <div style="text-align:center;margin-top:16px;display:flex;justify-content:space-between;">
+      <button id="btn-back" style="background:none;border:none;color:var(--muted);font-family:'DM Mono',monospace;font-size:12px;cursor:pointer;">← Voltar</button>
+      <button id="btn-resend" style="background:none;border:none;color:var(--accent);font-family:'DM Mono',monospace;font-size:12px;cursor:pointer;">Reenviar código</button>
+    </div>
+  </div>
+</div>
 <div id="app">
   <div class="topbar">
     <div class="topbar-logo"><span></span> Infoside HaaS</div>
@@ -116,6 +130,14 @@
       <div class="section-title">Equipamentos</div>
       <div class="toolbar-right">
         <select class="group-filter" id="group-filter" style="display:none"><option value="">Todos os grupos</option></select>
+        <select class="group-filter" id="date-filter">
+          <option value="">Qualquer data</option>
+          <option value="1">Visto nas últimas 24h</option>
+          <option value="7">Últimos 7 dias</option>
+          <option value="30">Últimos 30 dias</option>
+          <option value="90">Últimos 90 dias</option>
+          <option value="old90">Sem conexão há +90 dias</option>
+        </select>
         <input class="search-box" id="search-box" type="text" placeholder="Buscar...">
         <button class="btn" id="btn-expand">Expandir todos</button>
         <button class="btn" id="btn-export">Exportar Excel</button>
@@ -227,7 +249,19 @@ function updateStats(){
 }
 function applySearch(){
   const q=document.getElementById('search-box').value.toLowerCase().trim();
-  viewDevices=q?allDevices.filter(d=>JSON.stringify(d).toLowerCase().includes(q)):allDevices.slice();
+  const df=document.getElementById('date-filter').value;
+  let base=allDevices.slice();
+  if(df){
+    const now=Date.now();
+    base=base.filter(d=>{
+      const t=d.lastConnectedDateTimeUtc?new Date(d.lastConnectedDateTimeUtc).getTime():0;
+      if(!t)return df==='old90';
+      const days=(now-t)/86400000;
+      if(df==='old90')return days>90;
+      return days<=parseInt(df,10);
+    });
+  }
+  viewDevices=q?base.filter(d=>JSON.stringify(d).toLowerCase().includes(q)):base;
   sortDevices();
   openSet.clear();
   allExpanded=false;
@@ -273,20 +307,56 @@ function exportCSV(){
   a.download='equipamentos_infoside_'+new Date().toISOString().slice(0,10)+'.csv';
   a.click();
 }
-function showLogin(){document.getElementById('login-screen').style.display='flex';document.getElementById('app').style.display='none';}
-function showApp(u){currentUser=u;document.getElementById('login-screen').style.display='none';
+function showLogin(){document.getElementById('login-screen').style.display='flex';document.getElementById('twofa-screen').style.display='none';document.getElementById('app').style.display='none';}
+function show2FA(hint){document.getElementById('login-screen').style.display='none';document.getElementById('twofa-screen').style.display='flex';document.getElementById('app').style.display='none';
+  document.getElementById('twofa-hint').textContent='Enviamos um código para '+hint;
+  document.getElementById('inp-code').value='';document.getElementById('twofa-error').style.display='none';
+  setTimeout(()=>document.getElementById('inp-code').focus(),100);}
+function showApp(u){currentUser=u;document.getElementById('login-screen').style.display='none';document.getElementById('twofa-screen').style.display='none';
   document.getElementById('app').style.display='block';document.getElementById('user-name').textContent=u.name;
   if(u.isAdmin)document.getElementById('group-filter').style.display='block';loadDevices();}
-document.getElementById('btn-login').addEventListener('click',async()=>{
+let pendingUser='';
+async function doLogin(){
   const username=document.getElementById('inp-user').value.trim();
   const password=document.getElementById('inp-pass').value;
   const err=document.getElementById('login-error');err.style.display='none';
-  const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
-  const data=await r.json();if(!r.ok){err.style.display='block';return;}showApp(data);});
-document.getElementById('inp-pass').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('btn-login').click();});
+  const btn=document.getElementById('btn-login');btn.textContent='Enviando...';btn.disabled=true;
+  try{
+    const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+    const data=await r.json();
+    if(!r.ok){err.textContent=data.error||'Falha no login.';err.style.display='block';return;}
+    pendingUser=username;show2FA(data.email_hint||'seu e-mail');
+  }catch(e){err.textContent='Erro de conexão.';err.style.display='block';}
+  finally{btn.textContent='Entrar';btn.disabled=false;}
+}
+async function doVerify(){
+  const code=document.getElementById('inp-code').value.trim();
+  const err=document.getElementById('twofa-error');err.style.display='none';
+  const btn=document.getElementById('btn-verify');btn.textContent='Verificando...';btn.disabled=true;
+  try{
+    const r=await fetch('/api/verify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:pendingUser,code})});
+    const data=await r.json();
+    if(!r.ok){err.textContent=data.error||'Código inválido.';err.style.display='block';return;}
+    showApp(data);
+  }catch(e){err.textContent='Erro de conexão.';err.style.display='block';}
+  finally{btn.textContent='Confirmar';btn.disabled=false;}
+}
+document.getElementById('btn-login').addEventListener('click',doLogin);
+document.getElementById('inp-pass').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
+document.getElementById('btn-verify').addEventListener('click',doVerify);
+document.getElementById('inp-code').addEventListener('keydown',e=>{if(e.key==='Enter')doVerify();});
+document.getElementById('btn-back').addEventListener('click',showLogin);
+document.getElementById('btn-resend').addEventListener('click',async()=>{
+  const err=document.getElementById('twofa-error');err.style.display='none';
+  const r=await fetch('/api/resend',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:pendingUser})});
+  const data=await r.json();
+  if(!r.ok){err.textContent=data.error||'Falha ao reenviar.';err.style.display='block';}
+  else{err.style.color='var(--online)';err.textContent='Novo código enviado!';err.style.display='block';setTimeout(()=>{err.style.color='';err.style.display='none';},3000);}
+});
 document.getElementById('btn-logout').addEventListener('click',async()=>{await fetch('/api/logout',{method:'POST'});showLogin();});
 document.getElementById('btn-refresh').addEventListener('click',()=>loadDevices(document.getElementById('group-filter').value));
 document.getElementById('search-box').addEventListener('input',applySearch);
+document.getElementById('date-filter').addEventListener('change',applySearch);
 document.getElementById('group-filter').addEventListener('change',e=>loadDevices(e.target.value));
 document.getElementById('btn-export').addEventListener('click',exportCSV);
 document.getElementById('btn-expand').addEventListener('click',()=>{
