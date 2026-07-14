@@ -139,10 +139,8 @@ def fetch_all_devices(group_filter=None):
               'totalPhysicalRamBytes,availablePhysicalRamBytes,volumes,cpu,policyGroupName,domain')
     all_devices = []
     next_page = None
-    for _ in range(20):
+    for _ in range(30):
         qs = f'select={quote(fields, safe="")}&pageSize=100&agentStatus=A'
-        if group_filter:
-            qs += f'&policyGroupName={quote(group_filter, safe="")}'
         if next_page:
             qs += f'&nextPage={quote(next_page, safe="")}'
         r = absolute_request('GET', '/v3/reporting/devices', qs)
@@ -154,7 +152,28 @@ def fetch_all_devices(group_filter=None):
         all_devices.extend(page)
         next_page = body.get('metadata', {}).get('pagination', {}).get('nextPage')
         if not next_page or not page: break
+    # Filtro de grupo feito no código (robusto): compara ignorando maiúsc/espaços
+    if group_filter:
+        gf = group_filter.strip().lower()
+        all_devices = [d for d in all_devices
+                       if (d.get('policyGroupName') or '').strip().lower() == gf]
     return all_devices, None
+
+@app.get('/diag-grupos')
+def diag_grupos():
+    if 'user' not in session or not session['user'].get('isAdmin'):
+        return jsonify({'error':'Apenas administrador logado'}), 403
+    devs, err = fetch_all_devices(None)
+    if err:
+        return jsonify({'error': err}), 500
+    # Mostrar valores únicos exatos de policyGroupName (com aspas para ver espaços)
+    grupos = {}
+    for d in devs:
+        g = d.get('policyGroupName')
+        key = repr(g)  # repr mostra aspas e espaços
+        grupos[key] = grupos.get(key, 0) + 1
+    return jsonify({'total_equipamentos': len(devs),
+                    'grupos_exatos': grupos})
 
 @app.get('/diag')
 def diag():
