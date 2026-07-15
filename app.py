@@ -7,6 +7,24 @@ from flask import Flask, request, jsonify, session, send_from_directory
 
 app = Flask(__name__, static_folder='public', static_url_path='')
 app.secret_key = os.environ.get('SESSION_SECRET', 'dev-secret')
+# Sessão morre ao fechar o navegador (cookie de sessão, sem expiração salva)
+app.config['SESSION_PERMANENT'] = False
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('COOKIE_SECURE', 'true').lower() == 'true'
+# Tempo máximo de inatividade (minutos) antes de exigir novo login
+IDLE_TIMEOUT_MIN = int(os.environ.get('IDLE_TIMEOUT_MIN', '15'))
+
+def sessao_valida():
+    """Verifica se há sessão ativa e se não expirou por inatividade. Renova o relógio."""
+    if 'user' not in session:
+        return False
+    last = session.get('last_seen', 0)
+    if last and (time.time() - last) > IDLE_TIMEOUT_MIN * 60:
+        session.clear()
+        return False
+    session['last_seen'] = time.time()
+    return True
 
 TOKEN = os.environ.get('ABSOLUTE_TOKEN_ID', '')
 SECRET = os.environ.get('ABSOLUTE_SECRET', '')
@@ -269,7 +287,7 @@ def fetch_all_devices(group_filter=None):
 
 @app.get('/diag-dg')
 def diag_dg():
-    if 'user' not in session or not session['user'].get('isAdmin'):
+    if not sessao_valida() or not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador logado'}), 403
     out = {}
     candidatos = [
@@ -289,7 +307,7 @@ def diag_dg():
 
 @app.get('/diag-dominios')
 def diag_dominios():
-    if 'user' not in session or not session['user'].get('isAdmin'):
+    if not sessao_valida() or not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador logado'}), 403
     devs, err = fetch_all_devices(None)
     if err:
@@ -304,7 +322,7 @@ def diag_dominios():
 
 @app.get('/diag-grupos')
 def diag_grupos():
-    if 'user' not in session or not session['user'].get('isAdmin'):
+    if not sessao_valida() or not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador logado'}), 403
     devs, err = fetch_all_devices(None)
     if err:
@@ -365,6 +383,7 @@ def login():
     # 2FA desligado: cria sessão direto
     if not ENABLE_2FA:
         session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group']}
+        session['last_seen'] = time.time()
         registrar_acesso(username, u['name'], True, 'login direto')
         return jsonify({'success':True, 'step':'done', 'name':u['name'], 'isAdmin':u['is_admin']})
     # 2FA ligado: envia código
@@ -401,6 +420,7 @@ def verify():
         return jsonify({'error':'Código incorreto.'}), 401
     PENDING.pop(username, None)
     session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group']}
+    session['last_seen'] = time.time()
     registrar_acesso(username, u['name'], True, 'login com 2FA')
     return jsonify({'success':True, 'name':u['name'], 'isAdmin':u['is_admin']})
 
@@ -425,12 +445,12 @@ def logout():
 
 @app.get('/api/me')
 def me():
-    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    if not sessao_valida(): return jsonify({'error':'Não autenticado'}), 401
     return jsonify(session['user'])
 
 @app.get('/api/devices')
 def devices():
-    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    if not sessao_valida(): return jsonify({'error':'Não autenticado'}), 401
     u = session['user']
     group = request.args.get('group') if u['isAdmin'] else u['group_filter']
     devs, err = fetch_all_devices(group)
@@ -440,14 +460,14 @@ def devices():
 
 @app.get('/api/acessos')
 def acessos():
-    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    if not sessao_valida(): return jsonify({'error':'Não autenticado'}), 401
     if not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador'}), 403
     return jsonify({'total': len(ACCESS_LOG), 'acessos': ACCESS_LOG})
 
 @app.get('/api/groups')
 def groups():
-    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    if not sessao_valida(): return jsonify({'error':'Não autenticado'}), 401
     if not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador'}), 403
     # Lista os Device Groups (nomes) a partir da árvore
@@ -467,7 +487,7 @@ def groups():
 
 @app.get('/diag-dg2')
 def diag_dg2():
-    if 'user' not in session or not session['user'].get('isAdmin'):
+    if not sessao_valida() or not session['user'].get('isAdmin'):
         return jsonify({'error':'Apenas administrador logado'}), 403
     r = absolute_request('GET', '/v3/configurations/devicegrouptree/nodes', 'pageSize=100')
     out = {'nodes_status': r.status_code}
