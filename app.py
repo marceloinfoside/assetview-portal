@@ -48,6 +48,27 @@ except Exception as e:
 
 # Códigos 2FA temporários em memória: {username: {'code':..,'exp':..,'tries':..}}
 PENDING = {}
+# Histórico de acessos em memória (últimos N). Zera se o servidor reiniciar.
+ACCESS_LOG = []
+ACCESS_LOG_MAX = 300
+
+def registrar_acesso(username, nome, sucesso, motivo=''):
+    ip = request.headers.get('X-Forwarded-For', request.remote_addr or '')
+    if ip and ',' in ip:
+        ip = ip.split(',')[0].strip()
+    ua = request.headers.get('User-Agent', '')[:120]
+    ACCESS_LOG.insert(0, {
+        'quando': time.time(),
+        'usuario': username,
+        'nome': nome,
+        'sucesso': sucesso,
+        'motivo': motivo,
+        'ip': ip,
+        'navegador': ua,
+    })
+    del ACCESS_LOG[ACCESS_LOG_MAX:]
+    status = 'OK' if sucesso else 'FALHA'
+    print(f'[ACESSO] {status} usuario={username} ip={ip} {motivo}')
 CODE_TTL = 300  # 5 minutos
 MAX_TRIES = 5
 # 2FA desligado por padrão. Para ligar, defina ENABLE_2FA=true no Railway (requer Resend configurado).
@@ -339,18 +360,22 @@ def login():
     username = d.get('username','').strip()
     u = USERS.get(username)
     if not u or u['password'] != d.get('password',''):
+        registrar_acesso(username or '(vazio)', '', False, 'senha inválida')
         return jsonify({'error':'Usuário ou senha inválidos'}), 401
     # 2FA desligado: cria sessão direto
     if not ENABLE_2FA:
         session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group']}
+        registrar_acesso(username, u['name'], True, 'login direto')
         return jsonify({'success':True, 'step':'done', 'name':u['name'], 'isAdmin':u['is_admin']})
     # 2FA ligado: envia código
     if not u.get('email'):
+        registrar_acesso(username, u['name'], False, 'sem e-mail cadastrado')
         return jsonify({'error':'Usuário sem e-mail cadastrado. Contate o administrador.'}), 400
     code = f'{random.randint(0, 999999):06d}'
     PENDING[username] = {'code':code, 'exp':time.time()+CODE_TTL, 'tries':0}
     ok, err = send_2fa_email(u['email'], code, u['name'])
     if not ok:
+        registrar_acesso(username, u['name'], False, 'falha envio 2FA')
         return jsonify({'error':err or 'Falha ao enviar código.'}), 500
     return jsonify({'success':True, 'step':'2fa', 'email_hint':mask_email(u['email'])})
 
@@ -372,9 +397,11 @@ def verify():
         PENDING.pop(username, None)
         return jsonify({'error':'Muitas tentativas. Faça login novamente.'}), 429
     if code != p['code']:
+        registrar_acesso(username, u['name'], False, 'código 2FA incorreto')
         return jsonify({'error':'Código incorreto.'}), 401
     PENDING.pop(username, None)
     session['user'] = {'name':u['name'],'isAdmin':u['is_admin'],'group_filter':u['group']}
+    registrar_acesso(username, u['name'], True, 'login com 2FA')
     return jsonify({'success':True, 'name':u['name'], 'isAdmin':u['is_admin']})
 
 # ==== Reenviar código ====
@@ -410,6 +437,13 @@ def devices():
     if err:
         return jsonify({'error': err}), 500
     return jsonify({'devices': devs})
+
+@app.get('/api/acessos')
+def acessos():
+    if 'user' not in session: return jsonify({'error':'Não autenticado'}), 401
+    if not session['user'].get('isAdmin'):
+        return jsonify({'error':'Apenas administrador'}), 403
+    return jsonify({'total': len(ACCESS_LOG), 'acessos': ACCESS_LOG})
 
 @app.get('/api/groups')
 def groups():
