@@ -493,7 +493,13 @@ async function loadDevices(group=''){
   try{
     const url=group?'/api/devices?group='+encodeURIComponent(group):'/api/devices';
     const r=await fetch(url);
-    if(r.status===401){showLogin();return;}
+    if(r.status===401){
+      currentUser=null;showLogin();
+      const err=document.getElementById('login-error');
+      err.textContent='Sessão expirada. Faça login novamente.';
+      err.style.display='block';
+      return;
+    }
     const data=await r.json();
     if(data.error){box.innerHTML='<div class="empty-state">Erro: '+data.error+'</div>';return;}
     allDevices=data.devices||[];
@@ -528,6 +534,25 @@ function exportCSV(){
   a.download='equipamentos_infoside_'+new Date().toISOString().slice(0,10)+'.csv';
   a.click();
 }
+/* ==== Sessão: inatividade 15 min ==== */
+const IDLE_MIN=15;
+let idleTimer=null;
+function resetIdle(){
+  clearTimeout(idleTimer);
+  if(!currentUser)return;
+  idleTimer=setTimeout(async()=>{
+    await fetch('/api/logout',{method:'POST'}).catch(()=>{});
+    currentUser=null;
+    showLogin();
+    const err=document.getElementById('login-error');
+    err.textContent='Sessão encerrada por inatividade. Faça login novamente.';
+    err.style.display='block';
+  }, IDLE_MIN*60*1000);
+}
+['click','keydown','mousemove','scroll','touchstart'].forEach(ev=>{
+  document.addEventListener(ev,()=>{if(currentUser)resetIdle();},{passive:true});
+});
+
 function showLogin(){document.getElementById('login-screen').style.display='flex';document.getElementById('twofa-screen').style.display='none';document.getElementById('app').style.display='none';}
 function show2FA(hint){document.getElementById('login-screen').style.display='none';document.getElementById('twofa-screen').style.display='flex';document.getElementById('app').style.display='none';
   document.getElementById('twofa-hint').textContent='Enviamos um código para '+hint;
@@ -536,6 +561,7 @@ function show2FA(hint){document.getElementById('login-screen').style.display='no
 function showApp(u){currentUser=u;document.getElementById('login-screen').style.display='none';document.getElementById('twofa-screen').style.display='none';
   document.getElementById('app').style.display='block';document.getElementById('user-name').textContent=u.name;
   if(u.isAdmin){document.getElementById('group-filter').style.display='block';document.getElementById('btn-acessos').style.display='inline-block';}
+  resetIdle();
   loadDevices();}
 let pendingUser='';
 async function doLogin(){
@@ -608,7 +634,7 @@ async function carregarAcessos(){
 document.getElementById('btn-acessos').addEventListener('click',carregarAcessos);
 document.getElementById('fechar-acessos').addEventListener('click',()=>{document.getElementById('modal-acessos').style.display='none';});
 document.getElementById('modal-acessos').addEventListener('click',e=>{if(e.target.id==='modal-acessos')e.target.style.display='none';});
-document.getElementById('btn-logout').addEventListener('click',async()=>{await fetch('/api/logout',{method:'POST'});showLogin();});
+document.getElementById('btn-logout').addEventListener('click',async()=>{await fetch('/api/logout',{method:'POST'});currentUser=null;clearTimeout(idleTimer);showLogin();});
 document.getElementById('btn-refresh').addEventListener('click',()=>loadDevices(document.getElementById('group-filter').value));
 document.getElementById('search-box').addEventListener('input',applyAll);
 document.getElementById('date-days').addEventListener('input',applyAll);
