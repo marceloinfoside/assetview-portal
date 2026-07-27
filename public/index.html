@@ -35,7 +35,7 @@
   .main { padding:28px; max-width:1400px; margin:0 auto; }
 
   /* STATS */
-  .stats-row { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:14px; }
+  .stats-row { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:14px; }
   .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
   .stat-label { font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); font-weight:600; }
   .stat-value { font-size:26px; font-weight:800; line-height:1; margin-top:8px; }
@@ -173,10 +173,34 @@
       <div id="acessos-body" style="overflow-y:auto;padding:8px 0;"></div>
     </div>
   </div>
+  <div id="modal-import" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:500;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:var(--surface);border-radius:14px;max-width:640px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;">
+      <div style="padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:16px;font-weight:700;">Importar Vigências</div>
+          <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;margin-top:2px;">Planilha Excel com S/N e Vigência</div>
+        </div>
+        <button id="fechar-import" style="background:none;border:none;font-size:20px;color:var(--muted);cursor:pointer;">✕</button>
+      </div>
+      <div style="overflow-y:auto;padding:22px;">
+        <p style="font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:16px;">
+          Selecione a planilha Excel. O sistema lê as colunas <strong style="color:var(--text);">S/N</strong> e <strong style="color:var(--text);">Vigência</strong> de todas as abas, processa e gera o arquivo <code style="background:var(--surface2);padding:1px 5px;border-radius:4px;">vigencias.json</code> para você baixar e subir no GitHub.
+        </p>
+        <div style="border:2px dashed var(--border);border-radius:12px;padding:28px;text-align:center;margin-bottom:16px;">
+          <input type="file" id="file-vig" accept=".xlsx,.xlsm" style="display:none;">
+          <button class="btn btn-primary" id="btn-escolher">Escolher planilha Excel</button>
+          <div id="file-nome" style="font-size:12px;color:var(--muted);font-family:'DM Mono',monospace;margin-top:12px;"></div>
+        </div>
+        <button class="btn btn-primary" id="btn-processar" style="width:100%;display:none;">Processar planilha</button>
+        <div id="import-resultado" style="margin-top:20px;"></div>
+      </div>
+    </div>
+  </div>
   <div class="topbar">
     <div class="topbar-logo"><span></span> Infoside HaaS</div>
     <div class="topbar-right">
       <div class="user-badge">Olá, <strong id="user-name">—</strong></div>
+      <button class="btn-logout" id="btn-import-vig" style="display:none;">Importar Vigências</button>
       <button class="btn-logout" id="btn-acessos" style="display:none;">Acessos</button>
       <button class="btn-logout" id="btn-logout">Sair</button>
     </div>
@@ -186,7 +210,8 @@
       <div class="stat-card"><div class="stat-label">Equipamentos Ativos</div><div class="stat-value c-green" id="st-total">—</div></div>
       <div class="stat-card"><div class="stat-label">Vistos em 7 dias</div><div class="stat-value c-blue" id="st-seen7">—</div></div>
       <div class="stat-card"><div class="stat-label">Sem conexão +30d</div><div class="stat-value c-warn" id="st-old30">—</div></div>
-      <div class="stat-card"><div class="stat-label">Memória crítica ≥90%</div><div class="stat-value c-red" id="st-memcrit">—</div></div>
+      <div class="stat-card" id="card-venc" style="cursor:pointer;" title="Clique para filtrar"><div class="stat-label">Locações vencidas</div><div class="stat-value c-red" id="st-venc">—</div></div>
+      <div class="stat-card" id="card-alerta" style="cursor:pointer;" title="Clique para filtrar"><div class="stat-label">Vencem em 30 dias</div><div class="stat-value c-warn" id="st-alerta">—</div></div>
     </div>
 
     <div class="charts-row">
@@ -229,6 +254,13 @@
           <span class="date-count" id="date-count"></span>
           <button class="date-clear" id="date-clear" title="Limpar" style="display:none;">✕</button>
         </div>
+        <select class="group-filter" id="vig-filter">
+          <option value="">Toda vigência</option>
+          <option value="vencido">🔴 Vencidos</option>
+          <option value="alerta">🟡 Vencem em 30 dias</option>
+          <option value="ok">🟢 Em dia</option>
+          <option value="sem">Sem vigência</option>
+        </select>
         <input class="search-box" id="search-box" type="text" placeholder="Buscar...">
         <button class="btn" id="btn-expand">Expandir todos</button>
         <button class="btn" id="btn-export">Exportar Excel</button>
@@ -290,6 +322,28 @@ function lastSeen(v){if(!v)return'—';
   return dataHora+' ('+rel+')';}
 function daysSince(d){const t=d.lastConnectedDateTimeUtc?new Date(d.lastConnectedDateTimeUtc).getTime():0;
   if(!t)return null;return(Date.now()-t)/86400000;}
+function vigDias(d){
+  if(!d.vigencia)return null;
+  const t=new Date(d.vigencia+'T00:00:00').getTime();
+  if(isNaN(t))return null;
+  return Math.ceil((t-Date.now())/86400000);
+}
+function vigStatus(d){
+  const dias=vigDias(d);
+  if(dias===null)return null;
+  if(dias<0)return 'vencido';
+  if(dias<=30)return 'alerta';
+  return 'ok';
+}
+function vigFmt(d){
+  if(!d.vigencia)return '—';
+  const dt=new Date(d.vigencia+'T00:00:00');
+  const s=dt.toLocaleDateString('pt-BR');
+  const dias=vigDias(d);
+  if(dias<0)return s+' (vencido há '+Math.abs(dias)+' dias)';
+  if(dias===0)return s+' (vence hoje)';
+  return s+' (faltam '+dias+' dias)';
+}
 
 function countBy(list,fn){const m={};list.forEach(d=>{const k=fn(d);m[k]=(m[k]||0)+1;});return m;}
 function topEntries(m,n){return Object.entries(m).sort((a,b)=>b[1]-a[1]).slice(0,n);}
@@ -303,8 +357,10 @@ function renderStats(){
   document.getElementById('st-seen7').innerHTML=s7.toLocaleString('pt-BR')+'<span class="stat-sub">'+pct+'%</span>';
   const o30=allDevices.filter(d=>{const x=daysSince(d);return x===null||x>30;}).length;
   document.getElementById('st-old30').textContent=o30.toLocaleString('pt-BR');
-  const mc=allDevices.filter(d=>{const p=memPct(d);return p!==null&&p>=90;}).length;
-  document.getElementById('st-memcrit').textContent=mc.toLocaleString('pt-BR');
+  const venc=allDevices.filter(d=>vigStatus(d)==='vencido').length;
+  document.getElementById('st-venc').textContent=venc.toLocaleString('pt-BR');
+  const alerta=allDevices.filter(d=>vigStatus(d)==='alerta').length;
+  document.getElementById('st-alerta').textContent=alerta.toLocaleString('pt-BR');
 }
 function renderDonutOS(){
   const counts=countBy(allDevices,osGroup);
@@ -438,6 +494,14 @@ function applyAll(){
     document.getElementById('date-count').textContent='';
     document.getElementById('date-clear').style.display='none';
   }
+  const vf=document.getElementById('vig-filter').value;
+  if(vf){
+    base=base.filter(d=>{
+      const st=vigStatus(d);
+      if(vf==='sem')return st===null;
+      return st===vf;
+    });
+  }
   viewDevices=q?base.filter(d=>JSON.stringify(d).toLowerCase().includes(q)):base;
   sortDevices();
   openSet.clear();allExpanded=false;
@@ -463,7 +527,7 @@ function render(){
         <div class="cell cell-modelo">${model}</div>
         <div class="cell">${fmt(d.username)}</div>
         <div class="cell cell-serial">${fmt(d.serialNumber||d.esn)}</div>
-        <div style="text-align:center;"><span class="badge">Ativo</span></div>
+        <div style="text-align:center;"><span class="badge">Ativo</span>${(()=>{const st=vigStatus(d);if(st==='vencido')return ' <span title="Locação vencida" style="cursor:help;">🔴</span>';if(st==='alerta')return ' <span title="Locação vence em breve" style="cursor:help;">🟡</span>';return '';})()}</div>
       </div>
       ${open?`<div class="details">
         <div><div class="det-key">Nome completo</div><div class="det-val">${fmt(d.fullSystemName)}</div></div>
@@ -473,6 +537,7 @@ function render(){
         <div><div class="det-key">IP Local</div><div class="det-val">${fmtIp(d.localIpAddress)}</div></div>
         <div><div class="det-key">IP Público</div><div class="det-val">${fmtIp(d.publicIpAddress)}</div></div>
         <div><div class="det-key">Última conexão</div><div class="det-val">${lastSeen(d.lastConnectedDateTimeUtc)}</div></div>
+        ${d.vigencia?`<div><div class="det-key">Vigência da locação</div><div class="det-val" style="color:${vigStatus(d)==='vencido'?'var(--offline)':vigStatus(d)==='alerta'?'var(--warn)':'var(--text)'};font-weight:${vigStatus(d)==='ok'?'400':'600'};">${vigFmt(d)}</div></div>`:''}
         ${mp!==null?`<div><div class="det-key">Memória</div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:4px;"><div class="metric-bar-bg"><div class="metric-bar-fill ${barClass(mp)}" style="width:${mp}%"></div></div><span style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);">${mp}%</span></div>
           <div style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);margin-top:3px;">${gb(d.availablePhysicalRamBytes)} GB de ${gb(d.totalPhysicalRamBytes)} GB</div></div>`:''}
@@ -514,13 +579,15 @@ async function loadDevices(group=''){
   }catch(e){box.innerHTML='<div class="empty-state">Erro de conexão: '+e.message+'</div>';}
 }
 function exportCSV(){
-  const cols=[['Equipamento','deviceName'],['Nome completo','fullSystemName'],['Modelo',null],['Serial','serialNumber'],['Usuário','username'],['Usuário atual','currentUsername'],['Domínio','domain'],['Sistema',null],['IP Local','localIpAddress'],['IP Público','publicIpAddress'],['Última conexão','__lastseen__'],['Memória total (GB)','__memtot__'],['Status','agentStatus']];
+  const cols=[['Equipamento','deviceName'],['Nome completo','fullSystemName'],['Modelo',null],['Serial','serialNumber'],['Usuário','username'],['Usuário atual','currentUsername'],['Domínio','domain'],['Sistema',null],['IP Local','localIpAddress'],['IP Público','publicIpAddress'],['Última conexão','__lastseen__'],['Memória total (GB)','__memtot__'],['Vigência','__vig__'],['Status vigência','__vigst__'],['Status','agentStatus']];
   const head=cols.map(c=>c[0]).join(';');
   const rows=viewDevices.map(d=>cols.map(c=>{
     let v;
     if(c[1]==='localIpAddress'||c[1]==='publicIpAddress')v=fmtIp(d[c[1]]);
     else if(c[1]==='__lastseen__')v=lastSeen(d.lastConnectedDateTimeUtc);
     else if(c[1]==='__memtot__')v=d.totalPhysicalRamBytes?gb(d.totalPhysicalRamBytes):'';
+    else if(c[1]==='__vig__')v=d.vigencia?new Date(d.vigencia+'T00:00:00').toLocaleDateString('pt-BR'):'';
+    else if(c[1]==='__vigst__'){const st=vigStatus(d);v=st==='vencido'?'Vencido':st==='alerta'?'Vence em 30 dias':st==='ok'?'Em dia':'';}
     else if(c[0]==='Modelo')v=[d.systemManufacturer,d.systemModel].filter(Boolean).join(' ');
     else if(c[0]==='Sistema')v=osStr(d);
     else if(c[1]==='agentStatus')v='Ativo';
@@ -560,7 +627,7 @@ function show2FA(hint){document.getElementById('login-screen').style.display='no
   setTimeout(()=>document.getElementById('inp-code').focus(),100);}
 function showApp(u){currentUser=u;document.getElementById('login-screen').style.display='none';document.getElementById('twofa-screen').style.display='none';
   document.getElementById('app').style.display='block';document.getElementById('user-name').textContent=u.name;
-  if(u.isAdmin){document.getElementById('group-filter').style.display='block';document.getElementById('btn-acessos').style.display='inline-block';}
+  if(u.isAdmin){document.getElementById('group-filter').style.display='block';document.getElementById('btn-acessos').style.display='inline-block';document.getElementById('btn-import-vig').style.display='inline-block';}
   resetIdle();
   loadDevices();}
 let pendingUser='';
@@ -632,11 +699,78 @@ async function carregarAcessos(){
   }catch(e){body.innerHTML='<div style="padding:40px;text-align:center;color:var(--offline);">Erro de conexão</div>';}
 }
 document.getElementById('btn-acessos').addEventListener('click',carregarAcessos);
+let arquivoVig=null, jsonGerado=null;
+document.getElementById('btn-import-vig').addEventListener('click',()=>{
+  document.getElementById('modal-import').style.display='flex';
+  document.getElementById('import-resultado').innerHTML='';
+  document.getElementById('file-nome').textContent='';
+  document.getElementById('btn-processar').style.display='none';
+  arquivoVig=null;jsonGerado=null;
+});
+document.getElementById('fechar-import').addEventListener('click',()=>{document.getElementById('modal-import').style.display='none';});
+document.getElementById('modal-import').addEventListener('click',e=>{if(e.target.id==='modal-import')e.target.style.display='none';});
+document.getElementById('btn-escolher').addEventListener('click',()=>document.getElementById('file-vig').click());
+document.getElementById('file-vig').addEventListener('change',e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  arquivoVig=f;
+  document.getElementById('file-nome').textContent='📄 '+f.name;
+  document.getElementById('btn-processar').style.display='block';
+  document.getElementById('import-resultado').innerHTML='';
+});
+document.getElementById('btn-processar').addEventListener('click',async()=>{
+  if(!arquivoVig)return;
+  const btn=document.getElementById('btn-processar');
+  const res=document.getElementById('import-resultado');
+  btn.textContent='Processando...';btn.disabled=true;
+  res.innerHTML='';
+  try{
+    const fd=new FormData();
+    fd.append('arquivo',arquivoVig);
+    const r=await fetch('/api/importar-vigencias',{method:'POST',body:fd});
+    const data=await r.json();
+    if(!r.ok){res.innerHTML='<div style="color:var(--offline);font-size:13px;">'+(data.error||'Erro ao processar.')+'</div>';return;}
+    jsonGerado=data.vigencias_json;
+    const s=data.resumo;
+    res.innerHTML=`
+      <div style="background:var(--surface2);border-radius:10px;padding:16px;margin-bottom:16px;">
+        <div style="font-size:13px;font-weight:700;margin-bottom:12px;color:var(--online);">✓ Planilha processada com sucesso</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;font-family:'DM Mono',monospace;color:var(--muted);">
+          <div>Equipamentos: <strong style="color:var(--text);">${s.serials_unicos.toLocaleString('pt-BR')}</strong></div>
+          <div>Linhas lidas: <strong style="color:var(--text);">${s.total_linhas.toLocaleString('pt-BR')}</strong></div>
+          <div>🔴 Vencidos: <strong style="color:var(--offline);">${s.vencidos.toLocaleString('pt-BR')}</strong></div>
+          <div>🟡 Vencem 30d: <strong style="color:var(--warn);">${s.vencendo_30d.toLocaleString('pt-BR')}</strong></div>
+          <div>🟢 Em dia: <strong style="color:var(--online);">${s.em_dia.toLocaleString('pt-BR')}</strong></div>
+          <div>Sem vigência: <strong style="color:var(--text);">${s.sem_vigencia.toLocaleString('pt-BR')}</strong></div>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:10px;">${s.abas.length} abas processadas · ${s.duplicados} duplicados tratados</div>
+      </div>
+      <button class="btn btn-primary" id="btn-baixar-json" style="width:100%;">⬇ Baixar vigencias.json</button>
+      <div style="font-size:12px;color:var(--muted);line-height:1.6;margin-top:14px;padding:12px;background:var(--surface2);border-radius:8px;">
+        <strong style="color:var(--text);">Próximo passo:</strong> suba o <code style="background:var(--surface);padding:1px 5px;border-radius:4px;">vigencias.json</code> baixado no GitHub (mesmo lugar do app.py), substituindo o antigo. O Railway atualiza sozinho e as vigências novas aparecem no portal.
+      </div>`;
+    document.getElementById('btn-baixar-json').addEventListener('click',()=>{
+      const blob=new Blob([jsonGerado],{type:'application/json'});
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download='vigencias.json';
+      a.click();
+    });
+  }catch(e){res.innerHTML='<div style="color:var(--offline);font-size:13px;">Erro de conexão: '+e.message+'</div>';}
+  finally{btn.textContent='Processar planilha';btn.disabled=false;}
+});
 document.getElementById('fechar-acessos').addEventListener('click',()=>{document.getElementById('modal-acessos').style.display='none';});
 document.getElementById('modal-acessos').addEventListener('click',e=>{if(e.target.id==='modal-acessos')e.target.style.display='none';});
 document.getElementById('btn-logout').addEventListener('click',async()=>{await fetch('/api/logout',{method:'POST'});currentUser=null;clearTimeout(idleTimer);showLogin();});
 document.getElementById('btn-refresh').addEventListener('click',()=>loadDevices(document.getElementById('group-filter').value));
 document.getElementById('search-box').addEventListener('input',applyAll);
+document.getElementById('vig-filter').addEventListener('change',applyAll);
+document.getElementById('card-venc').addEventListener('click',()=>{
+  const f=document.getElementById('vig-filter');f.value=f.value==='vencido'?'':'vencido';applyAll();
+});
+document.getElementById('card-alerta').addEventListener('click',()=>{
+  const f=document.getElementById('vig-filter');f.value=f.value==='alerta'?'':'alerta';applyAll();
+});
 document.getElementById('date-days').addEventListener('input',applyAll);
 document.getElementById('date-mode').addEventListener('click',()=>{
   dateMode=dateMode==='recent'?'old':'recent';
