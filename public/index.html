@@ -196,10 +196,29 @@
       </div>
     </div>
   </div>
+  <div id="modal-novidades" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:600;align-items:center;justify-content:center;padding:20px;">
+    <div style="background:var(--surface);border-radius:14px;max-width:520px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 8px 40px rgba(0,0,0,.2);">
+      <div style="padding:20px 24px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:17px;font-weight:800;">✨ Novidades</div>
+          <div style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;margin-top:2px;" id="novidades-versao"></div>
+        </div>
+        <button id="fechar-novidades" style="background:none;border:none;font-size:20px;color:var(--muted);cursor:pointer;">✕</button>
+      </div>
+      <div id="novidades-body" style="overflow-y:auto;padding:22px 24px;"></div>
+      <div style="padding:16px 24px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);cursor:pointer;font-family:'DM Mono',monospace;">
+          <input type="checkbox" id="chk-nao-mostrar" style="cursor:pointer;"> Não mostrar novamente
+        </label>
+        <button class="btn btn-primary" id="btn-novidades-ok">Entendi</button>
+      </div>
+    </div>
+  </div>
   <div class="topbar">
     <div class="topbar-logo"><span></span> Infoside HaaS</div>
     <div class="topbar-right">
       <div class="user-badge">Olá, <strong id="user-name">—</strong></div>
+      <button class="btn-logout" id="btn-novidades" title="Novidades" style="position:relative;">🔔<span id="novidades-dot" style="display:none;position:absolute;top:2px;right:4px;width:8px;height:8px;background:var(--offline);border-radius:50%;"></span></button>
       <button class="btn-logout" id="btn-import-vig" style="display:none;">Importar Vigências</button>
       <button class="btn-logout" id="btn-acessos" style="display:none;">Acessos</button>
       <button class="btn-logout" id="btn-logout">Sair</button>
@@ -286,6 +305,20 @@
 </div>
 <script>
 let currentUser=null, allDevices=[], viewDevices=[], openSet=new Set(), allExpanded=false;
+/* ==== NOTAS DE VERSÃO ====
+   Para anunciar novidades: incremente NOVIDADES_VERSAO e edite o conteúdo.
+   Quem ainda não viu esta versão verá o popup automaticamente ao entrar. */
+const NOVIDADES_VERSAO = 3;
+const NOVIDADES = {
+  versao: '3',
+  data: 'Julho 2026',
+  itens: [
+    {t:'Controle de vigência das locações', d:'Os equipamentos agora mostram a data de término do contrato. Ícone 🟡 avisa quando falta 30 dias ou menos, e 🔴 quando já venceu.'},
+    {t:'Filtro por vigência', d:'Filtre rapidamente os equipamentos por status: vencidos, vencendo em 30 dias, em dia ou sem vigência.'},
+    {t:'Novos indicadores no painel', d:'Cards de "Locações vencidas" e "Vencem em 30 dias" no topo, clicáveis para filtrar na hora.'},
+    {t:'Segurança reforçada', d:'A sessão agora expira após 15 minutos de inatividade e ao fechar o navegador.'},
+  ]
+};
 let sortKey='deviceName', sortDir=1;
 let dateMode='recent';
 let chipFilters={os:null,model:null,mem:null,domain:null};
@@ -629,7 +662,45 @@ function showApp(u){currentUser=u;document.getElementById('login-screen').style.
   document.getElementById('app').style.display='block';document.getElementById('user-name').textContent=u.name;
   if(u.isAdmin){document.getElementById('group-filter').style.display='block';document.getElementById('btn-acessos').style.display='inline-block';document.getElementById('btn-import-vig').style.display='inline-block';}
   resetIdle();
-  loadDevices();}
+  loadDevices();
+  checarNovidades();}
+
+/* ==== NOVIDADES ==== */
+function montarNovidades(){
+  document.getElementById('novidades-versao').textContent='Versão '+NOVIDADES.versao+' · '+NOVIDADES.data;
+  document.getElementById('novidades-body').innerHTML=NOVIDADES.itens.map(i=>
+    `<div style="margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid #eef0f4;">
+      <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">${i.t}</div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.5;">${i.d}</div>
+    </div>`).join('');
+}
+function jaViu(){
+  try{return localStorage.getItem('infoside_novidades_vista')===String(NOVIDADES_VERSAO);}catch(e){return false;}
+}
+function abrirNovidades(){
+  montarNovidades();
+  document.getElementById('chk-nao-mostrar').checked=jaViu();
+  document.getElementById('modal-novidades').style.display='flex';
+}
+function checarNovidades(){
+  // ponto vermelho no sino se houver novidade não vista
+  document.getElementById('novidades-dot').style.display=jaViu()?'none':'block';
+  // popup automático só na primeira vez da versão
+  if(!jaViu()) abrirNovidades();
+}
+function fecharNovidades(){
+  const naoMostrar=document.getElementById('chk-nao-mostrar').checked;
+  try{
+    if(naoMostrar)localStorage.setItem('infoside_novidades_vista',String(NOVIDADES_VERSAO));
+    else localStorage.removeItem('infoside_novidades_vista');
+  }catch(e){}
+  document.getElementById('novidades-dot').style.display=jaViu()?'none':'block';
+  document.getElementById('modal-novidades').style.display='none';
+}
+document.getElementById('btn-novidades').addEventListener('click',abrirNovidades);
+document.getElementById('btn-novidades-ok').addEventListener('click',fecharNovidades);
+document.getElementById('fechar-novidades').addEventListener('click',fecharNovidades);
+document.getElementById('modal-novidades').addEventListener('click',e=>{if(e.target.id==='modal-novidades')fecharNovidades();});
 let pendingUser='';
 async function doLogin(){
   const username=document.getElementById('inp-user').value.trim();
