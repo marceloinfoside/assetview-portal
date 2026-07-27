@@ -37,6 +37,7 @@
   /* STATS */
   .stats-row { display:grid; grid-template-columns:repeat(5,1fr); gap:12px; margin-bottom:14px; }
   .stat-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+  .stat-card.ativo { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
   .stat-label { font-size:10px; letter-spacing:1px; text-transform:uppercase; color:var(--muted); font-weight:600; }
   .stat-value { font-size:26px; font-weight:800; line-height:1; margin-top:8px; }
   .stat-sub { font-size:12px; color:var(--muted); font-weight:600; margin-left:4px; }
@@ -98,13 +99,13 @@
 
   /* TABLE */
   .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
-  .thead { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 110px; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); background:var(--surface2); font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--muted); }
+  .thead { display:grid; grid-template-columns:32px 1.5fr 1.1fr 0.9fr 0.9fr 1fr 110px; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); background:var(--surface2); font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--muted); }
   .th-sort { cursor:pointer; user-select:none; display:flex; align-items:center; gap:4px; }
   .th-sort:hover { color:var(--accent); }
   .th-arrow { font-size:9px; opacity:.5; }
   .th-arrow.active { opacity:1; color:var(--accent); }
   .row-group { border-bottom:1px solid #eef0f4; display:block; width:100%; }
-  .row { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 110px; gap:12px; padding:14px 18px; align-items:center; cursor:pointer; transition:background .12s; }
+  .row { display:grid; grid-template-columns:32px 1.5fr 1.1fr 0.9fr 0.9fr 1fr 110px; gap:12px; padding:14px 18px; align-items:center; cursor:pointer; transition:background .12s; }
   .row:hover { background:var(--surface2); }
   .row.open { background:var(--surface2); }
   .toggle { width:22px; height:22px; border-radius:6px; background:#eef0f4; color:var(--muted); display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; transition:.15s; }
@@ -128,7 +129,7 @@
     .main{padding:16px;}
     .thead{grid-template-columns:28px 1.4fr 1fr 70px;}
     .row{grid-template-columns:28px 1.4fr 1fr 70px;}
-    .th-modelo,.cell-modelo,.th-serial,.cell-serial{display:none;}
+    .th-modelo,.cell-modelo,.th-serial,.cell-serial,.th-empresa,.cell-empresa{display:none;}
     .details{grid-template-columns:1fr 1fr;padding-left:46px;}
   }
 </style>
@@ -226,9 +227,9 @@
   </div>
   <div class="main">
     <div class="stats-row">
-      <div class="stat-card"><div class="stat-label">Equipamentos Ativos</div><div class="stat-value c-green" id="st-total">—</div></div>
-      <div class="stat-card"><div class="stat-label">Vistos em 7 dias</div><div class="stat-value c-blue" id="st-seen7">—</div></div>
-      <div class="stat-card"><div class="stat-label">Sem conexão +30d</div><div class="stat-value c-warn" id="st-old30">—</div></div>
+      <div class="stat-card" id="card-total" style="cursor:pointer;" title="Ver todos"><div class="stat-label">Equipamentos Ativos</div><div class="stat-value c-green" id="st-total">—</div></div>
+      <div class="stat-card" id="card-seen7" style="cursor:pointer;" title="Filtrar vistos em 7 dias"><div class="stat-label">Vistos em 7 dias</div><div class="stat-value c-blue" id="st-seen7">—</div></div>
+      <div class="stat-card" id="card-old30" style="cursor:pointer;" title="Filtrar sem conexão +30d"><div class="stat-label">Sem conexão +30d</div><div class="stat-value c-warn" id="st-old30">—</div></div>
       <div class="stat-card" id="card-venc" style="cursor:pointer;" title="Clique para filtrar"><div class="stat-label">Locações vencidas</div><div class="stat-value c-red" id="st-venc">—</div></div>
       <div class="stat-card" id="card-alerta" style="cursor:pointer;" title="Clique para filtrar"><div class="stat-label">Vencem em 30 dias</div><div class="stat-value c-warn" id="st-alerta">—</div></div>
     </div>
@@ -280,6 +281,7 @@
           <option value="ok">🟢 Em dia</option>
           <option value="sem">Sem vigência</option>
         </select>
+        <select class="group-filter" id="emp-filter"><option value="">Toda empresa</option></select>
         <button class="btn" id="btn-ordenar-atraso" title="Ordenar por mais atrasados">⏱ Mais atrasados</button>
         <input class="search-box" id="search-box" type="text" placeholder="Buscar...">
         <button class="btn" id="btn-expand">Expandir todos</button>
@@ -295,6 +297,7 @@
         <div class="th-sort th-modelo" data-sort="systemModel">Modelo <span class="th-arrow" data-arrow="systemModel">▼</span></div>
         <div class="th-sort" data-sort="username">Usuário <span class="th-arrow" data-arrow="username">▼</span></div>
         <div class="th-sort th-serial" data-sort="serialNumber">Serial <span class="th-arrow" data-arrow="serialNumber">▼</span></div>
+        <div class="th-sort th-empresa" data-sort="__empresa__">Empresa <span class="th-arrow" data-arrow="__empresa__">▼</span></div>
         <div class="th-sort" data-sort="__vigencia__" style="justify-content:center;">Vigência <span class="th-arrow" data-arrow="__vigencia__">▼</span></div>
       </div>
       <div id="device-list">
@@ -323,6 +326,8 @@ const NOVIDADES = {
 let sortKey='deviceName', sortDir=1;
 let dateMode='recent';
 let chipFilters={os:null,model:null,mem:null,domain:null};
+let cardFilter=null;  // 'seen7' | 'old30' | null (acionado pelos cards de conexão)
+let empresaFilter='';  // filtro por empresa (da planilha)
 const DIM_LABEL={os:'Sistema',model:'Modelo',mem:'Memória',domain:'Domínio'};
 const fmt=v=>(v==null||v==='')?'—':v;
 function fmtIp(v){if(v==null)return'—';if(Array.isArray(v))v=v[0];v=String(v).trim();
@@ -507,6 +512,14 @@ function sortDevices(){
     });
     return;
   }
+  if(sortKey==='__empresa__'){
+    viewDevices.sort((a,b)=>{
+      const x=(a.vigenciaEmpresa||'').toLowerCase(), y=(b.vigenciaEmpresa||'').toLowerCase();
+      if(!x&&!y)return 0; if(!x)return 1; if(!y)return -1;
+      if(x<y)return -1*sortDir; if(x>y)return 1*sortDir; return 0;
+    });
+    return;
+  }
   viewDevices.sort((a,b)=>{
     let x=(a[sortKey]||'').toString().toLowerCase();
     let y=(b[sortKey]||'').toString().toLowerCase();
@@ -527,6 +540,16 @@ function applyAll(){
   let base=allDevices.slice();
   for(const dim of ['os','model','mem','domain']){
     if(chipFilters[dim])base=base.filter(d=>dimValue(d,dim)===chipFilters[dim]);
+  }
+  // Filtro acionado pelos cards de conexão
+  if(cardFilter==='seen7'){
+    base=base.filter(d=>{const x=daysSince(d);return x!==null&&x<=7;});
+  }else if(cardFilter==='old30'){
+    base=base.filter(d=>{const x=daysSince(d);return x===null||x>30;});
+  }
+  // Filtro por empresa (da planilha de vigências)
+  if(empresaFilter){
+    base=base.filter(d=>(d.vigenciaEmpresa||'')===empresaFilter);
   }
   if(days!==null && !isNaN(days)){
     base=base.filter(d=>{
@@ -552,7 +575,14 @@ function applyAll(){
   sortDevices();
   openSet.clear();allExpanded=false;
   document.getElementById('btn-expand').textContent='Expandir todos';
-  renderChips();updateFooter();render();
+  renderChips();updateFooter();render();atualizarCardsAtivos();
+}
+function atualizarCardsAtivos(){
+  const vf=document.getElementById('vig-filter').value;
+  document.getElementById('card-seen7').classList.toggle('ativo',cardFilter==='seen7');
+  document.getElementById('card-old30').classList.toggle('ativo',cardFilter==='old30');
+  document.getElementById('card-venc').classList.toggle('ativo',vf==='vencido');
+  document.getElementById('card-alerta').classList.toggle('ativo',vf==='alerta');
 }
 function updateFooter(){
   document.getElementById('last-update').textContent='Última atualização: '+new Date().toLocaleString('pt-BR')+' · '+viewDevices.length.toLocaleString('pt-BR')+' exibidos';
@@ -573,6 +603,7 @@ function render(){
         <div class="cell cell-modelo">${model}</div>
         <div class="cell">${fmt(d.username)}</div>
         <div class="cell cell-serial">${fmt(d.serialNumber||d.esn)}</div>
+        <div class="cell cell-empresa" title="${d.vigenciaEmpresa||''}">${fmt(d.vigenciaEmpresa)}</div>
         <div style="text-align:center;">${(()=>{
           const st=vigStatus(d);
           if(st===null)return '<span class="badge">Ativo</span>';
@@ -591,6 +622,7 @@ function render(){
         <div><div class="det-key">IP Local</div><div class="det-val">${fmtIp(d.localIpAddress)}</div></div>
         <div><div class="det-key">IP Público</div><div class="det-val">${fmtIp(d.publicIpAddress)}</div></div>
         <div><div class="det-key">Última conexão</div><div class="det-val">${lastSeen(d.lastConnectedDateTimeUtc)}</div></div>
+        ${d.vigenciaEmpresa?`<div><div class="det-key">Empresa (contrato)</div><div class="det-val">${d.vigenciaEmpresa}</div></div>`:''}
         ${d.vigencia?`<div><div class="det-key">Vigência da locação</div><div class="det-val" style="color:${vigStatus(d)==='vencido'?'var(--offline)':vigStatus(d)==='alerta'?'var(--warn)':'var(--text)'};font-weight:${vigStatus(d)==='ok'?'400':'600'};">${vigFmt(d)}</div></div>`:''}
         ${mp!==null?`<div><div class="det-key">Memória</div>
           <div style="display:flex;align-items:center;gap:8px;margin-top:4px;"><div class="metric-bar-bg"><div class="metric-bar-fill ${barClass(mp)}" style="width:${mp}%"></div></div><span style="font-size:11px;font-family:'DM Mono',monospace;color:var(--muted);">${mp}%</span></div>
@@ -623,17 +655,27 @@ async function loadDevices(group=''){
     if(data.error){box.innerHTML='<div class="empty-state">Erro: '+data.error+'</div>';return;}
     allDevices=data.devices||[];
     chipFilters={os:null,model:null,mem:null,domain:null};
+    cardFilter=null;empresaFilter='';
     if(currentUser&&currentUser.isAdmin){
       const groups=[...new Set(allDevices.map(d=>d.policyGroupName).filter(Boolean))].sort();
       document.getElementById('group-filter').innerHTML='<option value="">Todos os grupos</option>'+groups.map(g=>`<option value="${g}">${g}</option>`).join('');
       document.getElementById('group-filter').value=group||'';
+    }
+    // Popula filtro de empresas (da planilha de vigências)
+    const empresas=[...new Set(allDevices.map(d=>d.vigenciaEmpresa).filter(Boolean))].sort();
+    const empSel=document.getElementById('emp-filter');
+    if(empresas.length){
+      empSel.style.display='';
+      empSel.innerHTML='<option value="">Toda empresa</option>'+empresas.map(e=>`<option value="${e}">${e}</option>`).join('');
+    }else{
+      empSel.style.display='none';
     }
     renderDashboard();
     applyAll();
   }catch(e){box.innerHTML='<div class="empty-state">Erro de conexão: '+e.message+'</div>';}
 }
 function exportCSV(){
-  const cols=[['Equipamento','deviceName'],['Nome completo','fullSystemName'],['Modelo',null],['Serial','serialNumber'],['Usuário','username'],['Usuário atual','currentUsername'],['Domínio','domain'],['Sistema',null],['IP Local','localIpAddress'],['IP Público','publicIpAddress'],['Última conexão','__lastseen__'],['Memória total (GB)','__memtot__'],['Vigência','__vig__'],['Status vigência','__vigst__'],['Status','agentStatus']];
+  const cols=[['Equipamento','deviceName'],['Nome completo','fullSystemName'],['Modelo',null],['Serial','serialNumber'],['Empresa','vigenciaEmpresa'],['Usuário','username'],['Usuário atual','currentUsername'],['Domínio','domain'],['Sistema',null],['IP Local','localIpAddress'],['IP Público','publicIpAddress'],['Última conexão','__lastseen__'],['Memória total (GB)','__memtot__'],['Vigência','__vig__'],['Status vigência','__vigst__'],['Status','agentStatus']];
   const head=cols.map(c=>c[0]).join(';');
   const rows=viewDevices.map(d=>cols.map(c=>{
     let v;
@@ -857,8 +899,25 @@ document.getElementById('btn-logout').addEventListener('click',async()=>{await f
 document.getElementById('btn-refresh').addEventListener('click',()=>loadDevices(document.getElementById('group-filter').value));
 document.getElementById('search-box').addEventListener('input',applyAll);
 document.getElementById('vig-filter').addEventListener('change',applyAll);
+document.getElementById('emp-filter').addEventListener('change',e=>{empresaFilter=e.target.value;applyAll();});
 document.getElementById('card-venc').addEventListener('click',()=>{
   const f=document.getElementById('vig-filter');f.value=f.value==='vencido'?'':'vencido';applyAll();
+});
+document.getElementById('card-total').addEventListener('click',()=>{
+  // limpa todos os filtros e mostra tudo
+  cardFilter=null;empresaFilter='';
+  chipFilters={os:null,model:null,mem:null,domain:null};
+  document.getElementById('vig-filter').value='';
+  document.getElementById('emp-filter').value='';
+  document.getElementById('date-days').value='';
+  document.getElementById('search-box').value='';
+  applyAll();
+});
+document.getElementById('card-seen7').addEventListener('click',()=>{
+  cardFilter=cardFilter==='seen7'?null:'seen7';applyAll();
+});
+document.getElementById('card-old30').addEventListener('click',()=>{
+  cardFilter=cardFilter==='old30'?null:'old30';applyAll();
 });
 document.getElementById('card-alerta').addEventListener('click',()=>{
   const f=document.getElementById('vig-filter');f.value=f.value==='alerta'?'':'alerta';applyAll();
