@@ -98,13 +98,13 @@
 
   /* TABLE */
   .table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:12px; overflow:hidden; }
-  .thead { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 90px; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); background:var(--surface2); font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--muted); }
+  .thead { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 110px; gap:12px; padding:12px 18px; border-bottom:1px solid var(--border); background:var(--surface2); font-size:10px; font-weight:600; letter-spacing:1px; text-transform:uppercase; color:var(--muted); }
   .th-sort { cursor:pointer; user-select:none; display:flex; align-items:center; gap:4px; }
   .th-sort:hover { color:var(--accent); }
   .th-arrow { font-size:9px; opacity:.5; }
   .th-arrow.active { opacity:1; color:var(--accent); }
   .row-group { border-bottom:1px solid #eef0f4; display:block; width:100%; }
-  .row { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 90px; gap:12px; padding:14px 18px; align-items:center; cursor:pointer; transition:background .12s; }
+  .row { display:grid; grid-template-columns:32px 1.6fr 1.3fr 1fr 1fr 110px; gap:12px; padding:14px 18px; align-items:center; cursor:pointer; transition:background .12s; }
   .row:hover { background:var(--surface2); }
   .row.open { background:var(--surface2); }
   .toggle { width:22px; height:22px; border-radius:6px; background:#eef0f4; color:var(--muted); display:flex; align-items:center; justify-content:center; font-size:16px; font-weight:700; transition:.15s; }
@@ -280,6 +280,7 @@
           <option value="ok">🟢 Em dia</option>
           <option value="sem">Sem vigência</option>
         </select>
+        <button class="btn" id="btn-ordenar-atraso" title="Ordenar por mais atrasados">⏱ Mais atrasados</button>
         <input class="search-box" id="search-box" type="text" placeholder="Buscar...">
         <button class="btn" id="btn-expand">Expandir todos</button>
         <button class="btn" id="btn-export">Exportar Excel</button>
@@ -294,7 +295,7 @@
         <div class="th-sort th-modelo" data-sort="systemModel">Modelo <span class="th-arrow" data-arrow="systemModel">▼</span></div>
         <div class="th-sort" data-sort="username">Usuário <span class="th-arrow" data-arrow="username">▼</span></div>
         <div class="th-sort th-serial" data-sort="serialNumber">Serial <span class="th-arrow" data-arrow="serialNumber">▼</span></div>
-        <div style="text-align:center;">Status</div>
+        <div class="th-sort" data-sort="__vigencia__" style="justify-content:center;">Vigência <span class="th-arrow" data-arrow="__vigencia__">▼</span></div>
       </div>
       <div id="device-list">
         <div class="loading-state"><div class="loading-spinner"></div><br>Carregando equipamentos...</div>
@@ -494,6 +495,18 @@ document.addEventListener('click',e=>{
 
 /* ==== FILTRO + RENDER ==== */
 function sortDevices(){
+  if(sortKey==='__vigencia__'){
+    // Ordena por dias até vencer: mais vencidos (números mais negativos) primeiro quando sortDir=1
+    viewDevices.sort((a,b)=>{
+      const da=vigDias(a), db=vigDias(b);
+      // sem vigência vai sempre para o fim
+      if(da===null && db===null)return 0;
+      if(da===null)return 1;
+      if(db===null)return -1;
+      return (da-db)*sortDir;
+    });
+    return;
+  }
   viewDevices.sort((a,b)=>{
     let x=(a[sortKey]||'').toString().toLowerCase();
     let y=(b[sortKey]||'').toString().toLowerCase();
@@ -560,7 +573,15 @@ function render(){
         <div class="cell cell-modelo">${model}</div>
         <div class="cell">${fmt(d.username)}</div>
         <div class="cell cell-serial">${fmt(d.serialNumber||d.esn)}</div>
-        <div style="text-align:center;"><span class="badge">Ativo</span>${(()=>{const st=vigStatus(d);if(st==='vencido')return ' <span title="Locação vencida" style="cursor:help;">🔴</span>';if(st==='alerta')return ' <span title="Locação vence em breve" style="cursor:help;">🟡</span>';return '';})()}</div>
+        <div style="text-align:center;">${(()=>{
+          const st=vigStatus(d);
+          if(st===null)return '<span class="badge">Ativo</span>';
+          const dias=vigDias(d);
+          const dt=new Date(d.vigencia+'T00:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'});
+          if(st==='vencido')return '<span title="Vencida há '+Math.abs(dias)+' dias" style="cursor:help;font-size:12px;font-family:\'DM Mono\',monospace;color:var(--offline);font-weight:600;">🔴 '+dt+'<br><span style="font-size:10px;">−'+Math.abs(dias)+'d</span></span>';
+          if(st==='alerta')return '<span title="Vence em '+dias+' dias" style="cursor:help;font-size:12px;font-family:\'DM Mono\',monospace;color:var(--warn);font-weight:600;">🟡 '+dt+'<br><span style="font-size:10px;">'+dias+'d</span></span>';
+          return '<span style="font-size:12px;font-family:\'DM Mono\',monospace;color:var(--muted);">🟢 '+dt+'</span>';
+        })()}</div>
       </div>
       ${open?`<div class="details">
         <div><div class="det-key">Nome completo</div><div class="det-val">${fmt(d.fullSystemName)}</div></div>
@@ -841,6 +862,12 @@ document.getElementById('card-venc').addEventListener('click',()=>{
 });
 document.getElementById('card-alerta').addEventListener('click',()=>{
   const f=document.getElementById('vig-filter');f.value=f.value==='alerta'?'':'alerta';applyAll();
+});
+document.getElementById('btn-ordenar-atraso').addEventListener('click',()=>{
+  sortKey='__vigencia__';sortDir=1;  // mais vencidos no topo
+  sortDevices();openSet.clear();allExpanded=false;
+  document.getElementById('btn-expand').textContent='Expandir todos';
+  updateArrows();render();
 });
 document.getElementById('date-days').addEventListener('input',applyAll);
 document.getElementById('date-mode').addEventListener('click',()=>{
