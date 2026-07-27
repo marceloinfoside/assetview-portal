@@ -1,4 +1,5 @@
-import time, os, json, base64, hmac, hashlib, random, smtplib, ssl
+import time, os, json, base64, hmac, hashlib, random, smtplib, ssl, io, re, unicodedata
+from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import requests
@@ -14,6 +15,19 @@ app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
 app.config['SESSION_COOKIE_SECURE'] = os.environ.get('COOKIE_SECURE', 'true').lower() == 'true'
 # Tempo máximo de inatividade (minutos) antes de exigir novo login
 IDLE_TIMEOUT_MIN = int(os.environ.get('IDLE_TIMEOUT_MIN', '15'))
+
+# ==== VIGÊNCIAS DE LOCAÇÃO (cruzamento por serial) ====
+# Arquivo gerado a partir da planilha de contratos. Fica junto do código no GitHub.
+VIGENCIAS = {}
+try:
+    with open(os.path.join(os.path.dirname(__file__), 'vigencias.json'), encoding='utf-8') as f:
+        VIGENCIAS = json.load(f)
+    print(f'[VIGENCIAS] {len(VIGENCIAS)} contratos carregados')
+except Exception as e:
+    print(f'[VIGENCIAS] não carregado: {e}')
+
+def serial_key(s):
+    return (s or '').upper().replace(' ', '').strip()
 
 def sessao_valida():
     """Verifica se há sessão ativa e se não expirou por inatividade. Renova o relógio."""
@@ -283,6 +297,14 @@ def fetch_all_devices(group_filter=None):
             if not filtered:
                 return None, err or f'Grupo "{group_filter}" não encontrado.'
             all_devices = filtered
+    # Cruza vigência de locação por serial
+    if VIGENCIAS:
+        for d in all_devices:
+            sn = serial_key(d.get('serialNumber') or d.get('esn'))
+            info = VIGENCIAS.get(sn)
+            if info and info.get('vigencia'):
+                d['vigencia'] = info['vigencia']
+                d['vigenciaEmpresa'] = info.get('empresa', '')
     return all_devices, None
 
 @app.get('/diag-dg')
@@ -457,6 +479,124 @@ def devices():
     if err:
         return jsonify({'error': err}), 500
     return jsonify({'devices': devs})
+
+@app.post('/api/importar-vigencias')
+def importar_vigencias():
+    if not sessao_valida() or not session['user'].get('isAdmin'):
+        return jsonify({'error':'Apenas administrador'}), 403
+    if 'arquivo' not in request.files:
+        return jsonify({'error':'Nenhum arquivo enviado.'}), 400
+    f = request.files['arquivo']
+    if not f.filename.lower().endswith(('.xlsx', '.xlsm')):
+        return jsonify({'error':'Envie um arquivo Excel (.xlsx).'}), 400
+    try:
+        import openpyxl
+    except ImportError:
+        return jsonify({'error':'Biblioteca openpyxl não instalada no servidor.'}), 500
+
+    def limpa(v):
+        if v is None: return ''
+        return str(v).replace('\xa0','').strip()
+    def norm_header(h):
+        if h is None: return ''
+        s = unicodedata.normalize('NFKD', str(h)).encode('ascii','ignore').decode()
+        return re.sub(r'[^A-Z]', '', s.upper())
+    def limpa_serial(v):
+        return limpa(v).upper().replace(' ','')
+
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(f.read()), data_only=True, read_only=True)
+    except Exception as e:
+        return jsonify({'error': f'Erro ao abrir o Excel: {str(e)[:150]}'}), 400
+
+    mapa = {}
+    total_serials = 0
+    sem_vig = 0
+    duplicados = 0
+    abas_processadas = []
+
+    for sh in wb.sheetnames:
+        ws = wb[sh]
+        rows = list(ws.iter_rows(values_only=True))
+        if len(rows) < 2:
+            continue
+        header = [norm_header(c) for c in rows[0]]
+        col_sn = col_vig = col_emp = None
+        for i, h in enumerate(header):
+            if h in ('SN','SNUMBER','SERIAL','SERIALNUMBER') and col_sn is None:
+                col_sn = i
+            if h.startswith('VIGENCIA') and col_vig is None:
+                col_vig = i
+            if h == 'EMPRESA':
+                col_emp = i
+        if col_sn is None:
+            for i, h in enumerate(header):
+                if 'SN' in h:
+                    col_sn = i; break
+        if col_sn is None:
+            continue
+        cnt_aba = 0
+        for row in rows[1:]:
+            if col_sn >= len(row): continue
+            serial = limpa_serial(row[col_sn])
+            if not serial or len(serial) < 4:
+                continue
+            total_serials += 1
+            cnt_aba += 1
+            vig = ''
+            if col_vig is not None and col_vig < len(row):
+                v = row[col_vig]
+                if isinstance(v, datetime):
+                    vig = v.strftime('%Y-%m-%d')
+                else:
+                    vs = limpa(v)
+                    if vs:
+                        for fmt in ('%d/%m/%Y','%Y-%m-%d','%d/%m/%y'):
+                            try:
+                                vig = datetime.strptime(vs, fmt).strftime('%Y-%m-%d'); break
+                            except: pass
+            empresa = limpa(row[col_emp]) if (col_emp is not None and col_emp < len(row)) else sh
+            if not empresa: empresa = sh
+            if not vig: sem_vig += 1
+            if serial in mapa:
+                duplicados += 1
+                old = mapa[serial]
+                if not old['vigencia'] and vig:
+                    mapa[serial] = {'vigencia':vig,'empresa':empresa}
+                elif old['vigencia'] and vig and vig > old['vigencia']:
+                    mapa[serial] = {'vigencia':vig,'empresa':empresa}
+            else:
+                mapa[serial] = {'vigencia':vig,'empresa':empresa}
+        if cnt_aba > 0:
+            abas_processadas.append({'aba': sh, 'equipamentos': cnt_aba})
+
+    # Estatística de status
+    hoje = datetime.now()
+    venc = alerta = ok = 0
+    for v in mapa.values():
+        if not v.get('vigencia'): continue
+        try:
+            dt = datetime.strptime(v['vigencia'], '%Y-%m-%d')
+            dias = (dt - hoje).days
+            if dias < 0: venc += 1
+            elif dias <= 30: alerta += 1
+            else: ok += 1
+        except: pass
+
+    return jsonify({
+        'success': True,
+        'resumo': {
+            'total_linhas': total_serials,
+            'serials_unicos': len(mapa),
+            'duplicados': duplicados,
+            'sem_vigencia': sem_vig,
+            'vencidos': venc,
+            'vencendo_30d': alerta,
+            'em_dia': ok,
+            'abas': abas_processadas,
+        },
+        'vigencias_json': json.dumps(mapa, ensure_ascii=False, indent=0)
+    })
 
 @app.get('/api/acessos')
 def acessos():
